@@ -51,18 +51,39 @@ jobs:
           python3 - << 'EOF'
           import glob, os, re
 
-          # 1. app/build.gradle minSdk (21) ve compileSdk (34) ayarla
-          for p in glob.glob("android/app/build.gradle*"):
+          # 1. settings.gradle AGP ve Kotlin surumlerini guncelle
+          for p in glob.glob("android/settings.gradle*"):
               with open(p, "r", encoding="utf-8") as f:
                   s = f.read()
-              s = re.sub(r"minSdk\s*=?\s*flutter\.minSdkVersion", "minSdk = 21", s)
-              s = re.sub(r"minSdkVersion\s+flutter\.minSdkVersion", "minSdkVersion 21", s)
-              s = re.sub(r"compileSdk\s*=?\s*flutter\.compileSdkVersion", "compileSdk = 34", s)
-              s = re.sub(r"compileSdkVersion\s+flutter\.compileSdkVersion", "compileSdkVersion 34", s)
+              s = re.sub(r'id\s+"com\.android\.application"\s+version\s+"[^"]+"', 'id "com.android.application" version "8.3.2"', s)
+              s = re.sub(r'id\s+"org\.jetbrains\.kotlin\.android"\s+version\s+"[^"]+"', 'id "org.jetbrains.kotlin.android" version "1.9.24"', s)
               with open(p, "w", encoding="utf-8") as f:
                   f.write(s)
 
-          # 2. flutter_bluetooth_serial AGP 8+ namespace ve compileSdkVersion 34 duzeltmesi
+          # 2. gradle-wrapper.properties Gradle 8.7 yap
+          gw = "android/gradle/wrapper/gradle-wrapper.properties"
+          if os.path.exists(gw):
+              with open(gw, "r", encoding="utf-8") as f:
+                  s = f.read()
+              s = re.sub(r"gradle-[0-9.]+-all\.zip", "gradle-8.7-all.zip", s)
+              s = re.sub(r"gradle-[0-9.]+-bin\.zip", "gradle-8.7-all.zip", s)
+              with open(gw, "w", encoding="utf-8") as f:
+                  f.write(s)
+
+          # 3. app/build.gradle minSdk (21), compileSdk (34), targetSdk (34) ayarla
+          for p in glob.glob("android/app/build.gradle*"):
+              with open(p, "r", encoding="utf-8") as f:
+                  s = f.read()
+              s = re.sub(r"minSdk\s*=?\s*flutter\.minSdkVersion", "minSdkVersion 21", s)
+              s = re.sub(r"minSdkVersion\s+flutter\.minSdkVersion", "minSdkVersion 21", s)
+              s = re.sub(r"compileSdk\s*=?\s*flutter\.compileSdkVersion", "compileSdkVersion 34", s)
+              s = re.sub(r"compileSdkVersion\s+flutter\.compileSdkVersion", "compileSdkVersion 34", s)
+              s = re.sub(r"targetSdk\s*=?\s*flutter\.targetSdkVersion", "targetSdkVersion 34", s)
+              s = re.sub(r"targetSdkVersion\s+flutter\.targetSdkVersion", "targetSdkVersion 34", s)
+              with open(p, "w", encoding="utf-8") as f:
+                  f.write(s)
+
+          # 4. Tum pub-cache eklentilerinin Android build.gradle dosyalarini AGP 8.3 / SDK 34 uyumlu yap
           cache_roots = [
               os.path.expanduser("~/.pub-cache"),
               os.environ.get("PUB_CACHE", ""),
@@ -70,12 +91,16 @@ jobs:
           for root in cache_roots:
               if not root or not os.path.exists(root):
                   continue
-              for p in glob.glob(os.path.join(root, "hosted/pub.dev/flutter_bluetooth_serial-*/android/build.gradle")):
+              for p in glob.glob(os.path.join(root, "hosted/pub.dev/*/android/build.gradle")):
                   with open(p, "r", encoding="utf-8") as f:
                       s = f.read()
-                  if "namespace" not in s:
+                  if "flutter_bluetooth_serial" in p and "namespace" not in s:
                       s = s.replace("android {", 'android {\n    namespace "io.github.edufolly.flutterbluetoothserial"', 1)
-                  s = re.sub(r"compileSdkVersion\s+\d+", "compileSdkVersion 34", s)
+                  s = re.sub(r"\bcompileSdk\s*=\s*[^\n]+", "compileSdkVersion 34", s)
+                  s = re.sub(r"\bcompileSdk\s+\d+", "compileSdkVersion 34", s)
+                  s = re.sub(r"\bcompileSdkVersion\s+\d+", "compileSdkVersion 34", s)
+                  s = re.sub(r"\bminSdk\s+(\d+)", r"minSdkVersion \1", s)
+                  s = re.sub(r"\bjvmTarget\s*=\s*17\b", "jvmTarget = '17'", s)
                   with open(p, "w", encoding="utf-8") as f:
                       f.write(s)
 
