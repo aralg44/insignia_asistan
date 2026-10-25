@@ -50,8 +50,8 @@ class _DashboardScreenState extends State<DashboardScreen> {
 
   // Yakıt ve Şehir Ayarları
   bool _lpgModu = true;
-  double _lpgFiyati = 25.50;
-  double _benzinFiyati = 44.00;
+  double _lpgFiyati = 40.50;
+  double _benzinFiyati = 77.00;
   String _seciliSehir = "SAKARYA";
   String _fiyatGuncellemeDurumu = "Kaydedilen fiyat";
   bool _fiyatCekiliyor = false;
@@ -108,8 +108,8 @@ class _DashboardScreenState extends State<DashboardScreen> {
   Future<void> _initAppSettings() async {
     final prefs = await SharedPreferences.getInstance();
     setState(() {
-      _lpgFiyati = prefs.getDouble('lpg_fiyat') ?? 25.50;
-      _benzinFiyati = prefs.getDouble('benzin_fiyat') ?? 44.00;
+      _lpgFiyati = prefs.getDouble('lpg_fiyat') ?? 40.50;
+      _benzinFiyati = prefs.getDouble('benzin_fiyat') ?? 77.00;
       _lpgModu = prefs.getBool('lpg_modu') ?? true;
       _seciliSehir = prefs.getString('secili_sehir') ?? "SAKARYA";
       _fiyatGuncellemeDurumu = prefs.getString('son_guncelleme') ?? "Varsayılan fiyat";
@@ -139,17 +139,34 @@ class _DashboardScreenState extends State<DashboardScreen> {
       _fiyatGuncellemeDurumu = "İnternetten çekiliyor...";
     });
 
-    try {
-      final url1 = Uri.parse("https://www.tppd.com.tr/tr/akaryakit-fiyatlari?il=${city.toLowerCase()}");
-      final res1 = await http.get(url1, headers: {
-        "User-Agent": "Mozilla/5.0 (Linux; Android 14) AppleWebKit/537.36 Chrome/124.0.0.0 Mobile"
-      }).timeout(const Duration(seconds: 6));
+    final headers = {
+      "User-Agent": "Mozilla/5.0 (Linux; Android 14) AppleWebKit/537.36 Chrome/124.0.0.0 Mobile"
+    };
 
-      if (res1.statusCode == 200) {
-        final parsed = _extractPricesFromHtml(res1.body);
-        if (parsed != null) {
+    // 1. Kaynak: Petrol Ofisi İl Bazlı Güncel Akaryakıt Fiyatları
+    try {
+      final poUrl = Uri.parse("https://www.petrolofisi.com.tr/akaryakit-fiyatlari/${city.toLowerCase()}-akaryakit-fiyatlari");
+      final resPo = await http.get(poUrl, headers: headers).timeout(const Duration(seconds: 8));
+      if (resPo.statusCode == 200) {
+        final parsedPo = _extractPetrolOfisiPrices(resPo.body);
+        if (parsedPo != null) {
           String saat = "${DateTime.now().hour.toString().padLeft(2, '0')}:${DateTime.now().minute.toString().padLeft(2, '0')}";
-          await _savePrices(parsed['lpg']!, parsed['benzin']!, _lpgModu, city, "Canlı ($city $saat)");
+          await _savePrices(parsedPo['lpg']!, parsedPo['benzin']!, _lpgModu, city, "Canlı PO ($city $saat)");
+          setState(() => _fiyatCekiliyor = false);
+          return true;
+        }
+      }
+    } catch (_) {}
+
+    // 2. Yedek Kaynak: Doviz.com İl Bazlı Akaryakıt Fiyatları
+    try {
+      final dovizUrl = Uri.parse("https://www.doviz.com/akaryakit-fiyatlari/${city.toLowerCase()}");
+      final resDoviz = await http.get(dovizUrl, headers: headers).timeout(const Duration(seconds: 8));
+      if (resDoviz.statusCode == 200) {
+        final parsedDoviz = _extractFallbackPrices(resDoviz.body);
+        if (parsedDoviz != null) {
+          String saat = "${DateTime.now().hour.toString().padLeft(2, '0')}:${DateTime.now().minute.toString().padLeft(2, '0')}";
+          await _savePrices(parsedDoviz['lpg']!, parsedDoviz['benzin']!, _lpgModu, city, "Canlı ($city $saat)");
           setState(() => _fiyatCekiliyor = false);
           return true;
         }
@@ -163,16 +180,31 @@ class _DashboardScreenState extends State<DashboardScreen> {
     return false;
   }
 
-  Map<String, double>? _extractPricesFromHtml(String html) {
-    final regex = RegExp(r'(\d{2}[.,]\d{2})');
+  Map<String, double>? _extractPetrolOfisiPrices(String html) {
+    final rowMatch = RegExp(r'<tr\s+class="price-row[^>]*>(.*?)</tr>', dotAll: true).firstMatch(html);
+    if (rowMatch == null) return null;
+    final spanMatches = RegExp(r'<span\s+class="with-tax">\s*([\d.,]+)\s*</span>').allMatches(rowMatch.group(1)!);
+    final prices = <double>[];
+    for (final m in spanMatches) {
+      final val = double.tryParse(m.group(1)!.replaceAll(',', '.'));
+      if (val != null && val > 5.0) prices.add(val);
+    }
+    if (prices.length >= 2) {
+      return {'benzin': prices.first, 'lpg': prices.last};
+    }
+    return null;
+  }
+
+  Map<String, double>? _extractFallbackPrices(String html) {
+    final regex = RegExp(r'(\d{2,3}[.,]\d{2})');
     final matches = regex.allMatches(html);
     List<double> benzins = [];
     List<double> lpgs = [];
     for (final m in matches) {
       double? val = double.tryParse(m.group(1)!.replaceAll(',', '.'));
       if (val != null) {
-        if (val >= 36.0 && val <= 65.0) benzins.add(val);
-        else if (val >= 18.0 && val <= 35.5) lpgs.add(val);
+        if (val >= 60.0 && val <= 92.0) benzins.add(val);
+        else if (val >= 30.0 && val <= 55.0) lpgs.add(val);
       }
     }
     if (benzins.isNotEmpty && lpgs.isNotEmpty) return {'benzin': benzins.first, 'lpg': lpgs.first};
