@@ -1,0 +1,98 @@
+name: Insignia OBD APK Derleyici
+
+on:
+  push:
+    branches: [ "main", "master" ]
+  workflow_dispatch:
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Kodu Cek
+        uses: actions/checkout@v4
+
+      - name: Java 17 Kur
+        uses: actions/setup-java@v4
+        with:
+          distribution: 'temurin'
+          java-version: '17'
+
+      - name: Flutter Kur
+        uses: subosito/flutter-action@v2
+        with:
+          flutter-version: '3.24.5'
+          channel: 'stable'
+
+      - name: Eksik Android Dosyalarini Olustur ve Izinleri Ekle
+        run: |
+          flutter create --org com.insignia.asistan --platforms android .
+          python3 - << 'EOF'
+          p = "android/app/src/main/AndroidManifest.xml"
+          with open(p, "r", encoding="utf-8") as f:
+              s = f.read()
+          perms = """    <uses-permission android:name="android.permission.INTERNET" />
+              <uses-permission android:name="android.permission.BLUETOOTH" />
+              <uses-permission android:name="android.permission.BLUETOOTH_ADMIN" />
+              <uses-permission android:name="android.permission.BLUETOOTH_CONNECT" />
+              <uses-permission android:name="android.permission.BLUETOOTH_SCAN" />
+              <uses-permission android:name="android.permission.ACCESS_FINE_LOCATION" />
+              <uses-permission android:name="android.permission.ACCESS_COARSE_LOCATION" />
+          """
+          if "BLUETOOTH_CONNECT" not in s:
+              s = s.replace("<application", perms + "    <application", 1)
+          with open(p, "w", encoding="utf-8") as f:
+              f.write(s)
+          EOF
+
+      - name: Paketleri Indir ve Gradle Uyumlulugunu Duzelt
+        run: |
+          flutter pub get
+          python3 - << 'EOF'
+          import glob, os, re
+
+          # 1. app/build.gradle minSdk (21) ve compileSdk (34) ayarla
+          for p in glob.glob("android/app/build.gradle*"):
+              with open(p, "r", encoding="utf-8") as f:
+                  s = f.read()
+              s = re.sub(r"minSdk\s*=?\s*flutter\.minSdkVersion", "minSdk = 21", s)
+              s = re.sub(r"minSdkVersion\s+flutter\.minSdkVersion", "minSdkVersion 21", s)
+              s = re.sub(r"compileSdk\s*=?\s*flutter\.compileSdkVersion", "compileSdk = 34", s)
+              s = re.sub(r"compileSdkVersion\s+flutter\.compileSdkVersion", "compileSdkVersion 34", s)
+              with open(p, "w", encoding="utf-8") as f:
+                  f.write(s)
+
+          # 2. flutter_bluetooth_serial AGP 8+ namespace ve compileSdkVersion 34 duzeltmesi
+          cache_roots = [
+              os.path.expanduser("~/.pub-cache"),
+              os.environ.get("PUB_CACHE", ""),
+          ]
+          for root in cache_roots:
+              if not root or not os.path.exists(root):
+                  continue
+              for p in glob.glob(os.path.join(root, "hosted/pub.dev/flutter_bluetooth_serial-*/android/build.gradle")):
+                  with open(p, "r", encoding="utf-8") as f:
+                      s = f.read()
+                  if "namespace" not in s:
+                      s = s.replace("android {", 'android {\n    namespace "io.github.edufolly.flutterbluetoothserial"', 1)
+                  s = re.sub(r"compileSdkVersion\s+\d+", "compileSdkVersion 34", s)
+                  with open(p, "w", encoding="utf-8") as f:
+                      f.write(s)
+
+              for p in glob.glob(os.path.join(root, "hosted/pub.dev/flutter_bluetooth_serial-*/android/src/main/AndroidManifest.xml")):
+                  with open(p, "r", encoding="utf-8") as f:
+                      s = f.read()
+                  s = re.sub(r'\s*package="[^"]+"', "", s)
+                  with open(p, "w", encoding="utf-8") as f:
+                      f.write(s)
+          EOF
+
+      - name: APK Derle
+        run: |
+          flutter build apk --release --no-tree-shake-icons
+
+      - name: APK Dosyasini Yukle
+        uses: actions/upload-artifact@v4
+        with:
+          name: Insignia-1.6T-Vites-Asistani-APK
+          path: build/app/outputs/flutter-apk/app-release.apk
