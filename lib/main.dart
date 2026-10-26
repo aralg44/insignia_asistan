@@ -31,6 +31,68 @@ class InsigniaApp extends StatelessWidget {
   }
 }
 
+class TripRecord {
+  final String id;
+  final String dateStr;
+  final double distanceKm;
+  final double fuelLiters;
+  final double totalCostTl;
+  final String fuelType;
+  final double unitPriceTl;
+  final int durationSeconds;
+  final int maxSpeed;
+  final int maxRpm;
+  final double maxBoostBar;
+
+  TripRecord({
+    required this.id,
+    required this.dateStr,
+    required this.distanceKm,
+    required this.fuelLiters,
+    required this.totalCostTl,
+    required this.fuelType,
+    required this.unitPriceTl,
+    required this.durationSeconds,
+    required this.maxSpeed,
+    required this.maxRpm,
+    required this.maxBoostBar,
+  });
+
+  double get avgLitersPer100Km =>
+      distanceKm >= 0.05 ? (fuelLiters / distanceKm) * 100.0 : 0.0;
+
+  double get avgTlPerKm =>
+      distanceKm >= 0.05 ? totalCostTl / distanceKm : 0.0;
+
+  Map<String, dynamic> toJson() => {
+        'id': id,
+        'dateStr': dateStr,
+        'distanceKm': distanceKm,
+        'fuelLiters': fuelLiters,
+        'totalCostTl': totalCostTl,
+        'fuelType': fuelType,
+        'unitPriceTl': unitPriceTl,
+        'durationSeconds': durationSeconds,
+        'maxSpeed': maxSpeed,
+        'maxRpm': maxRpm,
+        'maxBoostBar': maxBoostBar,
+      };
+
+  factory TripRecord.fromJson(Map<String, dynamic> json) => TripRecord(
+        id: (json['id'] ?? DateTime.now().millisecondsSinceEpoch.toString()).toString(),
+        dateStr: (json['dateStr'] ?? '').toString(),
+        distanceKm: (json['distanceKm'] as num?)?.toDouble() ?? 0.0,
+        fuelLiters: (json['fuelLiters'] as num?)?.toDouble() ?? 0.0,
+        totalCostTl: (json['totalCostTl'] as num?)?.toDouble() ?? 0.0,
+        fuelType: (json['fuelType'] ?? 'LPG').toString(),
+        unitPriceTl: (json['unitPriceTl'] as num?)?.toDouble() ?? 40.50,
+        durationSeconds: (json['durationSeconds'] as num?)?.toInt() ?? 0,
+        maxSpeed: (json['maxSpeed'] as num?)?.toInt() ?? 0,
+        maxRpm: (json['maxRpm'] as num?)?.toInt() ?? 0,
+        maxBoostBar: (json['maxBoostBar'] as num?)?.toDouble() ?? 0.0,
+      );
+}
+
 class DashboardScreen extends StatefulWidget {
   const DashboardScreen({super.key});
 
@@ -70,15 +132,26 @@ class _DashboardScreenState extends State<DashboardScreen> {
   int _currentGear = 0;
   String _arizaKodlari = "Yok";
 
-  // Maliyet Metrikleri
+  // Anlık ve Yolculuk Maliyet / Tüketim Metrikleri
   double _anlikLitreSaat = 0.0;
   double _anlikLitre100Km = 0.0;
   double _anlikTlKm = 0.0;
   double _toplamYolculukTl = 0.0;
   double _toplamYolculukKm = 0.0;
+  double _toplamYolculukLitre = 0.0;
+  double _aktifSurusSuresiSaniye = 0.0;
+  int _maksHiz = 0;
+  int _maksDevir = 0;
+  double _maksBoostBar = 0.0;
+  String _aktifSurusBaslangic = "";
+
   bool _cutOffAktif = false;
   bool _zenginKarisimAktif = false;
   DateTime _lastCalcTime = DateTime.now();
+  DateTime _lastDraftSaveTime = DateTime.now();
+
+  // Geçmiş Sürüş Kayıtları
+  List<TripRecord> _gecmisSurusler = [];
 
   // Durum ve Ses Filtresi
   String _bannerText = "OBD2 CİHAZI SEÇİN";
@@ -100,9 +173,33 @@ class _DashboardScreenState extends State<DashboardScreen> {
   @override
   void initState() {
     super.initState();
+    _aktifSurusBaslangic = _formatNow();
     _initAppSettings();
     _initTts();
     _initBluetooth();
+  }
+
+  String _formatNow() {
+    final now = DateTime.now();
+    final d = now.day.toString().padLeft(2, '0');
+    final m = now.month.toString().padLeft(2, '0');
+    final y = now.year;
+    final h = now.hour.toString().padLeft(2, '0');
+    final min = now.minute.toString().padLeft(2, '0');
+    return "$d.$m.$y $h:$min";
+  }
+
+  String _formatDuration(int totalSeconds) {
+    if (totalSeconds <= 0) return "0 dk";
+    final hours = totalSeconds ~/ 3600;
+    final mins = (totalSeconds % 3600) ~/ 60;
+    final secs = totalSeconds % 60;
+    if (hours > 0) {
+      return "${hours}s ${mins}dk";
+    } else if (mins > 0) {
+      return "${mins}dk ${secs}sn";
+    }
+    return "${secs}sn";
   }
 
   Future<void> _initAppSettings() async {
@@ -114,7 +211,139 @@ class _DashboardScreenState extends State<DashboardScreen> {
       _seciliSehir = prefs.getString('secili_sehir') ?? "SAKARYA";
       _fiyatGuncellemeDurumu = prefs.getString('son_guncelleme') ?? "Varsayılan fiyat";
     });
+
+    await _loadTripHistory();
+    await _recoverUnfinishedDraftTrip();
     await _fetchLiveFuelPrices(_seciliSehir);
+  }
+
+  Future<void> _loadTripHistory() async {
+    final prefs = await SharedPreferences.getInstance();
+    final rawList = prefs.getStringList('gecmis_surusler_v1') ?? [];
+    final loaded = <TripRecord>[];
+    for (final item in rawList) {
+      try {
+        loaded.add(TripRecord.fromJson(jsonDecode(item) as Map<String, dynamic>));
+      } catch (_) {}
+    }
+    setState(() {
+      _gecmisSurusler = loaded;
+    });
+  }
+
+  Future<void> _saveTripHistoryList() async {
+    final prefs = await SharedPreferences.getInstance();
+    final encoded = _gecmisSurusler.map((e) => jsonEncode(e.toJson())).toList();
+    await prefs.setStringList('gecmis_surusler_v1', encoded);
+  }
+
+  // Uygulama aniden kapanırsa yarım kalan sürüşü kurtarır
+  Future<void> _recoverUnfinishedDraftTrip() async {
+    final prefs = await SharedPreferences.getInstance();
+    final draftStr = prefs.getString('aktif_surus_taslak_v1');
+    if (draftStr != null && draftStr.isNotEmpty) {
+      try {
+        final draft = TripRecord.fromJson(jsonDecode(draftStr) as Map<String, dynamic>);
+        if (draft.distanceKm >= 0.05 || draft.fuelLiters >= 0.02) {
+          _gecmisSurusler.insert(0, draft);
+          await _saveTripHistoryList();
+        }
+      } catch (_) {}
+      await prefs.remove('aktif_surus_taslak_v1');
+      if (mounted) setState(() {});
+    }
+  }
+
+  Future<void> _saveDraftTrip() async {
+    if (_toplamYolculukKm < 0.05 && _toplamYolculukLitre < 0.02) return;
+    final prefs = await SharedPreferences.getInstance();
+    final suAnLpgde = _lpgModu && (_coolantTemp >= 40);
+    final draft = TripRecord(
+      id: "draft_${_aktifSurusBaslangic}",
+      dateStr: _aktifSurusBaslangic.isNotEmpty ? _aktifSurusBaslangic : _formatNow(),
+      distanceKm: _toplamYolculukKm,
+      fuelLiters: _toplamYolculukLitre,
+      totalCostTl: _toplamYolculukTl,
+      fuelType: _lpgModu ? "LPG" : "BENZİN",
+      unitPriceTl: suAnLpgde ? _lpgFiyati : _benzinFiyati,
+      durationSeconds: _aktifSurusSuresiSaniye.round(),
+      maxSpeed: _maksHiz,
+      maxRpm: _maksDevir,
+      maxBoostBar: _maksBoostBar,
+    );
+    await prefs.setString('aktif_surus_taslak_v1', jsonEncode(draft.toJson()));
+  }
+
+  Future<bool> _finalizeAndSaveCurrentTrip({bool silent = false}) async {
+    if (_toplamYolculukKm < 0.02 && _toplamYolculukLitre < 0.01) {
+      if (!silent && mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(
+            content: Text("Kaydedilecek kadar sürüş verisi henüz oluşmadı."),
+            backgroundColor: Colors.orange,
+          ),
+        );
+      }
+      return false;
+    }
+
+    final prefs = await SharedPreferences.getInstance();
+    final record = TripRecord(
+      id: DateTime.now().millisecondsSinceEpoch.toString(),
+      dateStr: _aktifSurusBaslangic.isNotEmpty ? _aktifSurusBaslangic : _formatNow(),
+      distanceKm: _toplamYolculukKm,
+      fuelLiters: _toplamYolculukLitre,
+      totalCostTl: _toplamYolculukTl,
+      fuelType: _lpgModu ? "LPG" : "BENZİN",
+      unitPriceTl: _lpgModu ? _lpgFiyati : _benzinFiyati,
+      durationSeconds: _aktifSurusSuresiSaniye.round(),
+      maxSpeed: _maksHiz,
+      maxRpm: _maksDevir,
+      maxBoostBar: _maksBoostBar,
+    );
+
+    setState(() {
+      _gecmisSurusler.insert(0, record);
+      _toplamYolculukKm = 0.0;
+      _toplamYolculukLitre = 0.0;
+      _toplamYolculukTl = 0.0;
+      _aktifSurusSuresiSaniye = 0.0;
+      _maksHiz = 0;
+      _maksDevir = 0;
+      _maksBoostBar = 0.0;
+      _aktifSurusBaslangic = _formatNow();
+    });
+
+    await _saveTripHistoryList();
+    await prefs.remove('aktif_surus_taslak_v1');
+
+    if (mounted) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(
+          content: Text(
+            "Sürüş kaydedildi: ${record.distanceKm.toStringAsFixed(1)} km | ${record.fuelLiters.toStringAsFixed(2)} L | ${record.totalCostTl.toStringAsFixed(1)} ₺",
+          ),
+          backgroundColor: Colors.green.shade700,
+        ),
+      );
+    }
+    _speak("Sürüş geçmişe kaydedildi");
+    return true;
+  }
+
+  Future<void> _resetCurrentTripWithoutSaving() async {
+    final prefs = await SharedPreferences.getInstance();
+    await prefs.remove('aktif_surus_taslak_v1');
+    setState(() {
+      _toplamYolculukKm = 0.0;
+      _toplamYolculukLitre = 0.0;
+      _toplamYolculukTl = 0.0;
+      _aktifSurusSuresiSaniye = 0.0;
+      _maksHiz = 0;
+      _maksDevir = 0;
+      _maksBoostBar = 0.0;
+      _aktifSurusBaslangic = _formatNow();
+    });
   }
 
   Future<void> _savePrices(double lpg, double benzin, bool isLpg, String sehir, String durum) async {
@@ -250,6 +479,9 @@ class _DashboardScreenState extends State<DashboardScreen> {
         _isConnected = true;
         _isConnecting = false;
         _lastCalcTime = DateTime.now();
+        if (_toplamYolculukKm < 0.01 && _toplamYolculukLitre < 0.01) {
+          _aktifSurusBaslangic = _formatNow();
+        }
         _bannerText = "BAĞLANDI - A16LET HAZIR";
         _bannerColor = Colors.green.shade700;
       });
@@ -263,6 +495,11 @@ class _DashboardScreenState extends State<DashboardScreen> {
         _bannerColor = Colors.red.shade800;
       });
     }
+  }
+
+  Future<void> _disconnectOBD() async {
+    await _finalizeAndSaveCurrentTrip(silent: true);
+    await _connection?.close();
   }
 
   String _rxBuffer = "";
@@ -305,12 +542,16 @@ class _DashboardScreenState extends State<DashboardScreen> {
   void _startObdLoop() async {
     _connection!.input!.listen((Uint8List data) {
       _rxBuffer += ascii.decode(data, allowInvalid: true);
-    }).onDone(() {
-      setState(() {
-        _isConnected = false;
-        _bannerText = "OBD BAĞLANTISI KOPTU";
-        _bannerColor = Colors.red.shade900;
-      });
+    }).onDone(() async {
+      // Kontak kapandığında / bağlantı koptuğunda sürüşü otomatik kaydet
+      await _finalizeAndSaveCurrentTrip(silent: true);
+      if (mounted) {
+        setState(() {
+          _isConnected = false;
+          _bannerText = "OBD BAĞLANTISI KOPTU (SÜRÜŞ KAYDEDİLDİ)";
+          _bannerColor = Colors.red.shade900;
+        });
+      }
     });
 
     for (String initCmd in ["ATZ", "ATE0", "ATL0", "ATS1", "ATH0", "ATSP0"]) {
@@ -328,7 +569,7 @@ class _DashboardScreenState extends State<DashboardScreen> {
 
       if (loopCount % 20 == 0) {
         _parsePid(await _sendObdCommand("0105"), "05", (a, _) => _coolantTemp = a - 40);
-        if (loopCount % 60 == 0) await _readDtcCodes(); // Her 60 döngüde bir arızaları kontrol et
+        if (loopCount % 60 == 0) await _readDtcCodes();
       }
       loopCount++;
 
@@ -350,10 +591,20 @@ class _DashboardScreenState extends State<DashboardScreen> {
 
   void _calculateFuelAndCost() {
     DateTime now = DateTime.now();
-    double dtHours = now.difference(_lastCalcTime).inMilliseconds / 3600000.0;
+    double dtSeconds = now.difference(_lastCalcTime).inMilliseconds / 1000.0;
+    double dtHours = dtSeconds / 3600.0;
     _lastCalcTime = now;
 
     double boostBar = (_mapKpa - 100) / 100.0;
+
+    // Maksimum sürüş değerlerini takip et
+    if (_speed > _maksHiz) _maksHiz = _speed;
+    if (_rpm > _maksDevir) _maksDevir = _rpm;
+    if (boostBar > _maksBoostBar) _maksBoostBar = boostBar;
+
+    if (dtSeconds > 0 && dtSeconds < 36.0 && (_rpm > 400 || _speed > 0)) {
+      _aktifSurusSuresiSaniye += dtSeconds;
+    }
 
     if (_speed > 15 && _currentGear > 0 && _rpm > 1400 && _load < 18 && _mapKpa < 38) {
       _cutOffAktif = true;
@@ -361,7 +612,9 @@ class _DashboardScreenState extends State<DashboardScreen> {
       _anlikLitreSaat = 0.0;
       _anlikLitre100Km = 0.0;
       _anlikTlKm = 0.0;
-      if (dtHours > 0 && dtHours < 0.01) _toplamYolculukKm += _speed * dtHours;
+      if (dtHours > 0 && dtHours < 0.01) {
+        _toplamYolculukKm += _speed * dtHours;
+      }
       return;
     }
     _cutOffAktif = false;
@@ -394,8 +647,15 @@ class _DashboardScreenState extends State<DashboardScreen> {
 
     if (dtHours > 0 && dtHours < 0.01) {
       double harcananLitre = _anlikLitreSaat * dtHours;
+      _toplamYolculukLitre += harcananLitre;
       _toplamYolculukTl += harcananLitre * aktifBirimFiyat;
       _toplamYolculukKm += _speed * dtHours;
+    }
+
+    // Her 15 saniyede bir taslağı yedekle (uygulama kapanırsa veri kaybolmasın)
+    if (now.difference(_lastDraftSaveTime).inSeconds >= 15) {
+      _lastDraftSaveTime = now;
+      _saveDraftTrip();
     }
   }
 
@@ -501,6 +761,300 @@ class _DashboardScreenState extends State<DashboardScreen> {
     }
   }
 
+  void _showTripHistorySheet() {
+    showModalBottomSheet(
+      context: context,
+      isScrollControlled: true,
+      backgroundColor: const Color(0xFF141416),
+      shape: const RoundedRectangleBorder(
+        borderRadius: BorderRadius.vertical(top: Radius.circular(20)),
+      ),
+      builder: (ctx) => StatefulBuilder(
+        builder: (context, setSheetState) {
+          double genelKm = 0.0;
+          double genelLitre = 0.0;
+          double genelTl = 0.0;
+          int genelSure = 0;
+
+          for (final s in _gecmisSurusler) {
+            genelKm += s.distanceKm;
+            genelLitre += s.fuelLiters;
+            genelTl += s.totalCostTl;
+            genelSure += s.durationSeconds;
+          }
+
+          final double genelOrtL100 = genelKm >= 0.05 ? (genelLitre / genelKm) * 100.0 : 0.0;
+          final double genelOrtTlKm = genelKm >= 0.05 ? genelTl / genelKm : 0.0;
+          final bool aktifVeriVar = _toplamYolculukKm >= 0.02 || _toplamYolculukLitre >= 0.01;
+
+          return DraggableScrollableSheet(
+            expand: false,
+            initialChildSize: 0.85,
+            minChildSize: 0.5,
+            maxChildSize: 0.95,
+            builder: (_, scrollController) => Padding(
+              padding: const EdgeInsets.all(14.0),
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Row(
+                    mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                    children: [
+                      const Row(
+                        children: [
+                          Icon(Icons.history, color: Colors.amberAccent),
+                          SizedBox(width: 8),
+                          Text(
+                            "GEÇMİŞ SÜRÜŞLER & MALİYET ÖZETİ",
+                            style: TextStyle(fontSize: 15, fontWeight: FontWeight.bold),
+                          ),
+                        ],
+                      ),
+                      Row(
+                        children: [
+                          if (_gecmisSurusler.isNotEmpty)
+                            IconButton(
+                              tooltip: "Tüm Geçmişi Sil",
+                              icon: const Icon(Icons.delete_sweep, color: Colors.redAccent),
+                              onPressed: () async {
+                                setState(() => _gecmisSurusler.clear());
+                                await _saveTripHistoryList();
+                                setSheetState(() {});
+                              },
+                            ),
+                          IconButton(
+                            icon: const Icon(Icons.close),
+                            onPressed: () => Navigator.pop(ctx),
+                          ),
+                        ],
+                      ),
+                    ],
+                  ),
+                  const SizedBox(height: 8),
+
+                  // Aktif Sürüşü Şimdi Kaydet Butonu
+                  if (aktifVeriVar)
+                    Container(
+                      margin: const EdgeInsets.only(bottom: 10),
+                      padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
+                      decoration: BoxDecoration(
+                        color: Colors.teal.shade900.withOpacity(0.6),
+                        borderRadius: BorderRadius.circular(12),
+                        border: Border.all(color: Colors.tealAccent.withOpacity(0.5)),
+                      ),
+                      child: Row(
+                        children: [
+                          Expanded(
+                            child: Column(
+                              crossAxisAlignment: CrossAxisAlignment.start,
+                              children: [
+                                const Text(
+                                  "AKTİF SÜRÜŞ DEVAM EDİYOR",
+                                  style: TextStyle(color: Colors.tealAccent, fontSize: 11, fontWeight: FontWeight.bold),
+                                ),
+                                const SizedBox(height: 2),
+                                Text(
+                                  "${_toplamYolculukKm.toStringAsFixed(2)} km • ${_toplamYolculukLitre.toStringAsFixed(2)} L • ${_toplamYolculukTl.toStringAsFixed(2)} ₺",
+                                  style: const TextStyle(color: Colors.white, fontSize: 13, fontWeight: FontWeight.bold),
+                                ),
+                              ],
+                            ),
+                          ),
+                          ElevatedButton.icon(
+                            style: ElevatedButton.styleFrom(backgroundColor: Colors.green.shade700),
+                            icon: const Icon(Icons.save, size: 16),
+                            label: const Text("BİTİR & KAYDET", style: TextStyle(fontSize: 12, fontWeight: FontWeight.bold)),
+                            onPressed: () async {
+                              await _finalizeAndSaveCurrentTrip();
+                              setSheetState(() {});
+                            },
+                          ),
+                        ],
+                      ),
+                    ),
+
+                  // Tüm Zamanlar Genel Toplam Kartı
+                  Container(
+                    width: double.infinity,
+                    padding: const EdgeInsets.all(12),
+                    decoration: BoxDecoration(
+                      gradient: const LinearGradient(
+                        colors: [Color(0xFF1F2937), Color(0xFF111827)],
+                      ),
+                      borderRadius: BorderRadius.circular(14),
+                      border: Border.all(color: Colors.amberAccent.withOpacity(0.35)),
+                    ),
+                    child: Column(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      children: [
+                        Row(
+                          mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                          children: [
+                            Text(
+                              "TÜM ZAMANLAR TOPLAMI (${_gecmisSurusler.length} Sürüş)",
+                              style: const TextStyle(color: Colors.amberAccent, fontSize: 11, fontWeight: FontWeight.bold),
+                            ),
+                            Text(
+                              "Toplam Süre: ${_formatDuration(genelSure)}",
+                              style: const TextStyle(color: Colors.white70, fontSize: 11),
+                            ),
+                          ],
+                        ),
+                        const Divider(color: Colors.white24, height: 14),
+                        Row(
+                          mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                          children: [
+                            _summaryItem("TOPLAM YOL", "${genelKm.toStringAsFixed(1)} km", Colors.white),
+                            _summaryItem("HARCANAN YAKIT", "${genelLitre.toStringAsFixed(2)} L", Colors.cyanAccent),
+                            _summaryItem("TOPLAM TUTAR", "${genelTl.toStringAsFixed(2)} ₺", Colors.greenAccent),
+                          ],
+                        ),
+                        const SizedBox(height: 8),
+                        Row(
+                          mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                          children: [
+                            Text(
+                              "Ortalama Tüketim: ${genelOrtL100.toStringAsFixed(1)} L / 100km",
+                              style: const TextStyle(color: Colors.white70, fontSize: 11, fontWeight: FontWeight.w600),
+                            ),
+                            Text(
+                              "Ortalama: ${genelOrtTlKm.toStringAsFixed(2)} ₺ / km",
+                              style: const TextStyle(color: Colors.amberAccent, fontSize: 11, fontWeight: FontWeight.w600),
+                            ),
+                          ],
+                        ),
+                      ],
+                    ),
+                  ),
+                  const SizedBox(height: 12),
+
+                  Expanded(
+                    child: _gecmisSurusler.isEmpty
+                        ? const Center(
+                            child: Text(
+                              "Henüz kaydedilmiş sürüş bulunmuyor.\nOBD bağlantısı kesildiğinde veya 'KAYDET' butonuna\nbastığınızda sürüşleriniz burada listelenir.",
+                              textAlign: TextAlign.center,
+                              style: TextStyle(color: Colors.white54, fontSize: 13),
+                            ),
+                          )
+                        : ListView.builder(
+                            controller: scrollController,
+                            itemCount: _gecmisSurusler.length,
+                            itemBuilder: (context, index) {
+                              final item = _gecmisSurusler[index];
+                              return Container(
+                                margin: const EdgeInsets.only(bottom: 10),
+                                padding: const EdgeInsets.all(12),
+                                decoration: BoxDecoration(
+                                  color: const Color(0xFF1C1C1E),
+                                  borderRadius: BorderRadius.circular(12),
+                                  border: Border.all(color: Colors.white12),
+                                ),
+                                child: Column(
+                                  crossAxisAlignment: CrossAxisAlignment.start,
+                                  children: [
+                                    Row(
+                                      mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                                      children: [
+                                        Row(
+                                          children: [
+                                            const Icon(Icons.calendar_today, size: 13, color: Colors.white70),
+                                            const SizedBox(width: 6),
+                                            Text(
+                                              item.dateStr,
+                                              style: const TextStyle(fontWeight: FontWeight.bold, fontSize: 13),
+                                            ),
+                                            const SizedBox(width: 8),
+                                            Container(
+                                              padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 2),
+                                              decoration: BoxDecoration(
+                                                color: item.fuelType == "LPG"
+                                                    ? Colors.green.shade900
+                                                    : Colors.blue.shade900,
+                                                borderRadius: BorderRadius.circular(6),
+                                              ),
+                                              child: Text(
+                                                "${item.fuelType} (${item.unitPriceTl.toStringAsFixed(2)} ₺)",
+                                                style: const TextStyle(fontSize: 10, fontWeight: FontWeight.bold),
+                                              ),
+                                            ),
+                                          ],
+                                        ),
+                                        InkWell(
+                                          onTap: () async {
+                                            setState(() => _gecmisSurusler.removeAt(index));
+                                            await _saveTripHistoryList();
+                                            setSheetState(() {});
+                                          },
+                                          child: const Icon(Icons.delete_outline, size: 18, color: Colors.white54),
+                                        ),
+                                      ],
+                                    ),
+                                    const Divider(color: Colors.white12, height: 14),
+                                    Row(
+                                      mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                                      children: [
+                                        _summaryItem("MESAFE", "${item.distanceKm.toStringAsFixed(2)} km", Colors.white),
+                                        _summaryItem(
+                                          "YAKIT (${item.avgLitersPer100Km.toStringAsFixed(1)} L/100)",
+                                          "${item.fuelLiters.toStringAsFixed(2)} L",
+                                          Colors.cyanAccent,
+                                        ),
+                                        _summaryItem(
+                                          "TUTAR (${item.avgTlPerKm.toStringAsFixed(2)} ₺/km)",
+                                          "${item.totalCostTl.toStringAsFixed(2)} ₺",
+                                          Colors.amberAccent,
+                                        ),
+                                      ],
+                                    ),
+                                    const SizedBox(height: 8),
+                                    Row(
+                                      mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                                      children: [
+                                        Text(
+                                          "⏱ Süre: ${_formatDuration(item.durationSeconds)}",
+                                          style: const TextStyle(color: Colors.white54, fontSize: 11),
+                                        ),
+                                        Text(
+                                          "🚀 Maks: ${item.maxSpeed} km/s",
+                                          style: const TextStyle(color: Colors.white54, fontSize: 11),
+                                        ),
+                                        Text(
+                                          "🔥 Turbo: ${item.maxBoostBar >= 0 ? '+' : ''}${item.maxBoostBar.toStringAsFixed(2)} bar",
+                                          style: const TextStyle(color: Colors.white54, fontSize: 11),
+                                        ),
+                                        Text(
+                                          "⚙️ ${item.maxRpm} d/d",
+                                          style: const TextStyle(color: Colors.white54, fontSize: 11),
+                                        ),
+                                      ],
+                                    ),
+                                  ],
+                                ),
+                              );
+                            },
+                          ),
+                  ),
+                ],
+              ),
+            ),
+          );
+        },
+      ),
+    );
+  }
+
+  Widget _summaryItem(String label, String value, Color color) {
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        Text(label, style: const TextStyle(color: Colors.white54, fontSize: 10, fontWeight: FontWeight.bold)),
+        const SizedBox(height: 2),
+        Text(value, style: TextStyle(color: color, fontSize: 16, fontWeight: FontWeight.w900)),
+      ],
+    );
+  }
+
   void _showPriceAndDtcDialog() {
     final lpgCtrl = TextEditingController(text: _lpgFiyati.toStringAsFixed(2));
     final benzinCtrl = TextEditingController(text: _benzinFiyati.toStringAsFixed(2));
@@ -571,7 +1125,6 @@ class _DashboardScreenState extends State<DashboardScreen> {
                   decoration: const InputDecoration(labelText: "Benzin Fiyatı (TL)", border: OutlineInputBorder()),
                 ),
                 const Divider(color: Colors.white24, height: 20),
-                // ARIZA KODU BÖLÜMÜ
                 Text("Motor Arıza Durumu: $_arizaKodlari", style: const TextStyle(color: Colors.orangeAccent, fontSize: 12)),
                 const SizedBox(height: 8),
                 Row(
@@ -599,12 +1152,9 @@ class _DashboardScreenState extends State<DashboardScreen> {
           ),
           actions: [
             TextButton(
-              onPressed: () {
-                setState(() {
-                  _toplamYolculukTl = 0.0;
-                  _toplamYolculukKm = 0.0;
-                });
-                Navigator.pop(ctx);
+              onPressed: () async {
+                await _resetCurrentTripWithoutSaving();
+                if (context.mounted) Navigator.pop(ctx);
               },
               child: const Text("SAYACI SIFIRLA", style: TextStyle(color: Colors.redAccent)),
             ),
@@ -634,8 +1184,16 @@ class _DashboardScreenState extends State<DashboardScreen> {
     return Scaffold(
       appBar: AppBar(
         backgroundColor: const Color(0xFF1C1C1E),
-        title: const Text("INSIGNIA 1.6T ASİSTAN", style: TextStyle(fontWeight: FontWeight.bold, fontSize: 16)),
+        title: const Text("INSIGNIA 1.6T", style: TextStyle(fontWeight: FontWeight.bold, fontSize: 15)),
         actions: [
+          TextButton.icon(
+            onPressed: _showTripHistorySheet,
+            icon: const Icon(Icons.history, color: Colors.cyanAccent, size: 18),
+            label: Text(
+              "GEÇMİŞ (${_gecmisSurusler.length})",
+              style: const TextStyle(color: Colors.cyanAccent, fontWeight: FontWeight.bold, fontSize: 11),
+            ),
+          ),
           TextButton.icon(
             onPressed: _showPriceAndDtcDialog,
             icon: _fiyatCekiliyor
@@ -675,8 +1233,8 @@ class _DashboardScreenState extends State<DashboardScreen> {
                     backgroundColor: _isConnected ? Colors.red.shade700 : Colors.blue.shade700,
                     padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 12),
                   ),
-                  onPressed: _isConnecting ? null : (_isConnected ? () => _connection?.close() : _connectOBD),
-                  child: Text(_isConnected ? "KES" : "BAĞLAN", style: const TextStyle(fontWeight: FontWeight.bold)),
+                  onPressed: _isConnecting ? null : (_isConnected ? _disconnectOBD : _connectOBD),
+                  child: Text(_isConnected ? "KES & KAYDET" : "BAĞLAN", style: const TextStyle(fontWeight: FontWeight.bold)),
                 ),
               ],
             ),
@@ -727,7 +1285,7 @@ class _DashboardScreenState extends State<DashboardScreen> {
                   Expanded(
                     flex: 6,
                     child: GestureDetector(
-                      onTap: _showPriceAndDtcDialog,
+                      onTap: _showTripHistorySheet,
                       child: Container(
                         padding: const EdgeInsets.all(10),
                         decoration: BoxDecoration(
@@ -745,7 +1303,7 @@ class _DashboardScreenState extends State<DashboardScreen> {
                             Text(
                               _speed >= 5 ? "${_anlikTlKm.toStringAsFixed(2)} ₺" : "${_anlikTlKm.toStringAsFixed(1)} ₺",
                               style: TextStyle(
-                                fontSize: 32,
+                                fontSize: 30,
                                 fontWeight: FontWeight.w900,
                                 color: _cutOffAktif ? Colors.greenAccent : (_zenginKarisimAktif ? Colors.redAccent : Colors.white),
                               ),
@@ -755,14 +1313,36 @@ class _DashboardScreenState extends State<DashboardScreen> {
                               textAlign: TextAlign.center,
                               style: const TextStyle(color: Colors.white54, fontSize: 9),
                             ),
-                            const Divider(color: Colors.white12, height: 8),
+                            const Divider(color: Colors.white12, height: 6),
                             Text(
                               _speed >= 5 ? "${_anlikLitre100Km.toStringAsFixed(1)} L / 100km" : "${_anlikLitreSaat.toStringAsFixed(2)} L / saat",
-                              style: const TextStyle(color: Colors.cyanAccent, fontSize: 15, fontWeight: FontWeight.bold),
+                              style: const TextStyle(color: Colors.cyanAccent, fontSize: 14, fontWeight: FontWeight.bold),
                             ),
                             Text(
-                              "Yolculuk: ${_toplamYolculukTl.toStringAsFixed(1)} ₺ (${_toplamYolculukKm.toStringAsFixed(1)} km)",
-                              style: const TextStyle(color: Colors.white70, fontSize: 11),
+                              "${_toplamYolculukKm.toStringAsFixed(1)} km • ${_toplamYolculukLitre.toStringAsFixed(2)} L • ${_toplamYolculukTl.toStringAsFixed(1)} ₺",
+                              textAlign: TextAlign.center,
+                              style: const TextStyle(color: Colors.white, fontSize: 11, fontWeight: FontWeight.bold),
+                            ),
+                            SizedBox(
+                              height: 26,
+                              child: OutlinedButton.icon(
+                                style: OutlinedButton.styleFrom(
+                                  side: const BorderSide(color: Colors.cyanAccent, width: 1),
+                                  padding: const EdgeInsets.symmetric(horizontal: 8),
+                                ),
+                                icon: const Icon(Icons.save_alt, size: 13, color: Colors.cyanAccent),
+                                label: const Text(
+                                  "SÜRÜŞÜ KAYDET / GEÇMİŞ",
+                                  style: TextStyle(color: Colors.cyanAccent, fontSize: 9, fontWeight: FontWeight.bold),
+                                ),
+                                onPressed: () async {
+                                  if (_toplamYolculukKm >= 0.02 || _toplamYolculukLitre >= 0.01) {
+                                    await _finalizeAndSaveCurrentTrip();
+                                  } else {
+                                    _showTripHistorySheet();
+                                  }
+                                },
+                              ),
                             ),
                           ],
                         ),
