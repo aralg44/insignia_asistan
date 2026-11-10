@@ -8,6 +8,9 @@ import 'package:permission_handler/permission_handler.dart';
 import 'package:wakelock_plus/wakelock_plus.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 import 'package:http/http.dart' as http;
+import 'package:geolocator/geolocator.dart';
+import 'package:flutter_map/flutter_map.dart';
+import 'package:latlong2/latlong.dart';
 
 void main() {
   WidgetsFlutterBinding.ensureInitialized();
@@ -25,72 +28,11 @@ class InsigniaApp extends StatelessWidget {
       debugShowCheckedModeBanner: false,
       theme: ThemeData.dark().copyWith(
         scaffoldBackgroundColor: const Color(0xFF0D0D0F),
+        appBarTheme: const AppBarTheme(backgroundColor: Color(0xFF161618)),
       ),
       home: const DashboardScreen(),
     );
   }
-}
-
-class TripRecord {
-  final String id;
-  final String dateStr;
-  final double distanceKm;
-  final double fuelLiters;
-  final double totalCostTl;
-  final String fuelType;
-  final double unitPriceTl;
-  final int durationSeconds;
-  final int maxSpeed;
-  final int maxRpm;
-  final double maxBoostBar;
-
-  TripRecord({
-    required this.id,
-    required this.dateStr,
-    required this.distanceKm,
-    required this.fuelLiters,
-    required this.totalCostTl,
-    required this.fuelType,
-    required this.unitPriceTl,
-    required this.durationSeconds,
-    required this.maxSpeed,
-    required this.maxRpm,
-    required this.maxBoostBar,
-  });
-
-  double get avgLitersPer100Km =>
-      distanceKm >= 0.05 ? (fuelLiters / distanceKm) * 100.0 : 0.0;
-
-  double get avgTlPerKm =>
-      distanceKm >= 0.05 ? totalCostTl / distanceKm : 0.0;
-
-  Map<String, dynamic> toJson() => {
-        'id': id,
-        'dateStr': dateStr,
-        'distanceKm': distanceKm,
-        'fuelLiters': fuelLiters,
-        'totalCostTl': totalCostTl,
-        'fuelType': fuelType,
-        'unitPriceTl': unitPriceTl,
-        'durationSeconds': durationSeconds,
-        'maxSpeed': maxSpeed,
-        'maxRpm': maxRpm,
-        'maxBoostBar': maxBoostBar,
-      };
-
-  factory TripRecord.fromJson(Map<String, dynamic> json) => TripRecord(
-        id: (json['id'] ?? DateTime.now().millisecondsSinceEpoch.toString()).toString(),
-        dateStr: (json['dateStr'] ?? '').toString(),
-        distanceKm: (json['distanceKm'] as num?)?.toDouble() ?? 0.0,
-        fuelLiters: (json['fuelLiters'] as num?)?.toDouble() ?? 0.0,
-        totalCostTl: (json['totalCostTl'] as num?)?.toDouble() ?? 0.0,
-        fuelType: (json['fuelType'] ?? 'LPG').toString(),
-        unitPriceTl: (json['unitPriceTl'] as num?)?.toDouble() ?? 40.50,
-        durationSeconds: (json['durationSeconds'] as num?)?.toInt() ?? 0,
-        maxSpeed: (json['maxSpeed'] as num?)?.toInt() ?? 0,
-        maxRpm: (json['maxRpm'] as num?)?.toInt() ?? 0,
-        maxBoostBar: (json['maxBoostBar'] as num?)?.toDouble() ?? 0.0,
-      );
 }
 
 class DashboardScreen extends StatefulWidget {
@@ -112,8 +54,8 @@ class _DashboardScreenState extends State<DashboardScreen> {
 
   // Yakıt ve Şehir Ayarları
   bool _lpgModu = true;
-  double _lpgFiyati = 40.50;
-  double _benzinFiyati = 77.00;
+  double _lpgFiyati = 25.50;
+  double _benzinFiyati = 44.00;
   String _seciliSehir = "SAKARYA";
   String _fiyatGuncellemeDurumu = "Kaydedilen fiyat";
   bool _fiyatCekiliyor = false;
@@ -130,28 +72,16 @@ class _DashboardScreenState extends State<DashboardScreen> {
   int _coolantTemp = 80;
   double _mafGrams = 0.0;
   int _currentGear = 0;
-  String _arizaKodlari = "Yok";
 
-  // Anlık ve Yolculuk Maliyet / Tüketim Metrikleri
+  // Maliyet Metrikleri
   double _anlikLitreSaat = 0.0;
   double _anlikLitre100Km = 0.0;
   double _anlikTlKm = 0.0;
   double _toplamYolculukTl = 0.0;
   double _toplamYolculukKm = 0.0;
-  double _toplamYolculukLitre = 0.0;
-  double _aktifSurusSuresiSaniye = 0.0;
-  int _maksHiz = 0;
-  int _maksDevir = 0;
-  double _maksBoostBar = 0.0;
-  String _aktifSurusBaslangic = "";
-
   bool _cutOffAktif = false;
   bool _zenginKarisimAktif = false;
   DateTime _lastCalcTime = DateTime.now();
-  DateTime _lastDraftSaveTime = DateTime.now();
-
-  // Geçmiş Sürüş Kayıtları
-  List<TripRecord> _gecmisSurusler = [];
 
   // Durum ve Ses Filtresi
   String _bannerText = "OBD2 CİHAZI SEÇİN";
@@ -170,180 +100,37 @@ class _DashboardScreenState extends State<DashboardScreen> {
     6: [20.5,  24.7,  0.744],
   };
 
+  // OBD İletişim Senkronizasyonu
+  final StringBuffer _rxStreamBuffer = StringBuffer();
+  Completer<String>? _cmdCompleter;
+  StreamSubscription<Position>? _gpsSubscription;
+  final List<LatLng> _routePoints = [];
+
   @override
   void initState() {
     super.initState();
-    _aktifSurusBaslangic = _formatNow();
     _initAppSettings();
     _initTts();
-    _initBluetooth();
+    _initBluetoothAndLocation();
   }
 
-  String _formatNow() {
-    final now = DateTime.now();
-    final d = now.day.toString().padLeft(2, '0');
-    final m = now.month.toString().padLeft(2, '0');
-    final y = now.year;
-    final h = now.hour.toString().padLeft(2, '0');
-    final min = now.minute.toString().padLeft(2, '0');
-    return "$d.$m.$y $h:$min";
-  }
-
-  String _formatDuration(int totalSeconds) {
-    if (totalSeconds <= 0) return "0 dk";
-    final hours = totalSeconds ~/ 3600;
-    final mins = (totalSeconds % 3600) ~/ 60;
-    final secs = totalSeconds % 60;
-    if (hours > 0) {
-      return "${hours}s ${mins}dk";
-    } else if (mins > 0) {
-      return "${mins}dk ${secs}sn";
-    }
-    return "${secs}sn";
+  @override
+  void dispose() {
+    _gpsSubscription?.cancel();
+    _connection?.dispose();
+    super.dispose();
   }
 
   Future<void> _initAppSettings() async {
     final prefs = await SharedPreferences.getInstance();
     setState(() {
-      _lpgFiyati = prefs.getDouble('lpg_fiyat') ?? 40.50;
-      _benzinFiyati = prefs.getDouble('benzin_fiyat') ?? 77.00;
+      _lpgFiyati = prefs.getDouble('lpg_fiyat') ?? 25.50;
+      _benzinFiyati = prefs.getDouble('benzin_fiyat') ?? 44.00;
       _lpgModu = prefs.getBool('lpg_modu') ?? true;
       _seciliSehir = prefs.getString('secili_sehir') ?? "SAKARYA";
       _fiyatGuncellemeDurumu = prefs.getString('son_guncelleme') ?? "Varsayılan fiyat";
     });
-
-    await _loadTripHistory();
-    await _recoverUnfinishedDraftTrip();
     await _fetchLiveFuelPrices(_seciliSehir);
-  }
-
-  Future<void> _loadTripHistory() async {
-    final prefs = await SharedPreferences.getInstance();
-    final rawList = prefs.getStringList('gecmis_surusler_v1') ?? [];
-    final loaded = <TripRecord>[];
-    for (final item in rawList) {
-      try {
-        loaded.add(TripRecord.fromJson(jsonDecode(item) as Map<String, dynamic>));
-      } catch (_) {}
-    }
-    setState(() {
-      _gecmisSurusler = loaded;
-    });
-  }
-
-  Future<void> _saveTripHistoryList() async {
-    final prefs = await SharedPreferences.getInstance();
-    final encoded = _gecmisSurusler.map((e) => jsonEncode(e.toJson())).toList();
-    await prefs.setStringList('gecmis_surusler_v1', encoded);
-  }
-
-  // Uygulama aniden kapanırsa yarım kalan sürüşü kurtarır
-  Future<void> _recoverUnfinishedDraftTrip() async {
-    final prefs = await SharedPreferences.getInstance();
-    final draftStr = prefs.getString('aktif_surus_taslak_v1');
-    if (draftStr != null && draftStr.isNotEmpty) {
-      try {
-        final draft = TripRecord.fromJson(jsonDecode(draftStr) as Map<String, dynamic>);
-        if (draft.distanceKm >= 0.05 || draft.fuelLiters >= 0.02) {
-          _gecmisSurusler.insert(0, draft);
-          await _saveTripHistoryList();
-        }
-      } catch (_) {}
-      await prefs.remove('aktif_surus_taslak_v1');
-      if (mounted) setState(() {});
-    }
-  }
-
-  Future<void> _saveDraftTrip() async {
-    if (_toplamYolculukKm < 0.05 && _toplamYolculukLitre < 0.02) return;
-    final prefs = await SharedPreferences.getInstance();
-    final suAnLpgde = _lpgModu && (_coolantTemp >= 40);
-    final draft = TripRecord(
-      id: "draft_${_aktifSurusBaslangic}",
-      dateStr: _aktifSurusBaslangic.isNotEmpty ? _aktifSurusBaslangic : _formatNow(),
-      distanceKm: _toplamYolculukKm,
-      fuelLiters: _toplamYolculukLitre,
-      totalCostTl: _toplamYolculukTl,
-      fuelType: _lpgModu ? "LPG" : "BENZİN",
-      unitPriceTl: suAnLpgde ? _lpgFiyati : _benzinFiyati,
-      durationSeconds: _aktifSurusSuresiSaniye.round(),
-      maxSpeed: _maksHiz,
-      maxRpm: _maksDevir,
-      maxBoostBar: _maksBoostBar,
-    );
-    await prefs.setString('aktif_surus_taslak_v1', jsonEncode(draft.toJson()));
-  }
-
-  Future<bool> _finalizeAndSaveCurrentTrip({bool silent = false}) async {
-    if (_toplamYolculukKm < 0.02 && _toplamYolculukLitre < 0.01) {
-      if (!silent && mounted) {
-        ScaffoldMessenger.of(context).showSnackBar(
-          const SnackBar(
-            content: Text("Kaydedilecek kadar sürüş verisi henüz oluşmadı."),
-            backgroundColor: Colors.orange,
-          ),
-        );
-      }
-      return false;
-    }
-
-    final prefs = await SharedPreferences.getInstance();
-    final record = TripRecord(
-      id: DateTime.now().millisecondsSinceEpoch.toString(),
-      dateStr: _aktifSurusBaslangic.isNotEmpty ? _aktifSurusBaslangic : _formatNow(),
-      distanceKm: _toplamYolculukKm,
-      fuelLiters: _toplamYolculukLitre,
-      totalCostTl: _toplamYolculukTl,
-      fuelType: _lpgModu ? "LPG" : "BENZİN",
-      unitPriceTl: _lpgModu ? _lpgFiyati : _benzinFiyati,
-      durationSeconds: _aktifSurusSuresiSaniye.round(),
-      maxSpeed: _maksHiz,
-      maxRpm: _maksDevir,
-      maxBoostBar: _maksBoostBar,
-    );
-
-    setState(() {
-      _gecmisSurusler.insert(0, record);
-      _toplamYolculukKm = 0.0;
-      _toplamYolculukLitre = 0.0;
-      _toplamYolculukTl = 0.0;
-      _aktifSurusSuresiSaniye = 0.0;
-      _maksHiz = 0;
-      _maksDevir = 0;
-      _maksBoostBar = 0.0;
-      _aktifSurusBaslangic = _formatNow();
-    });
-
-    await _saveTripHistoryList();
-    await prefs.remove('aktif_surus_taslak_v1');
-
-    if (mounted) {
-      ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(
-          content: Text(
-            "Sürüş kaydedildi: ${record.distanceKm.toStringAsFixed(1)} km | ${record.fuelLiters.toStringAsFixed(2)} L | ${record.totalCostTl.toStringAsFixed(1)} ₺",
-          ),
-          backgroundColor: Colors.green.shade700,
-        ),
-      );
-    }
-    _speak("Sürüş geçmişe kaydedildi");
-    return true;
-  }
-
-  Future<void> _resetCurrentTripWithoutSaving() async {
-    final prefs = await SharedPreferences.getInstance();
-    await prefs.remove('aktif_surus_taslak_v1');
-    setState(() {
-      _toplamYolculukKm = 0.0;
-      _toplamYolculukLitre = 0.0;
-      _toplamYolculukTl = 0.0;
-      _aktifSurusSuresiSaniye = 0.0;
-      _maksHiz = 0;
-      _maksDevir = 0;
-      _maksBoostBar = 0.0;
-      _aktifSurusBaslangic = _formatNow();
-    });
   }
 
   Future<void> _savePrices(double lpg, double benzin, bool isLpg, String sehir, String durum) async {
@@ -368,34 +155,17 @@ class _DashboardScreenState extends State<DashboardScreen> {
       _fiyatGuncellemeDurumu = "İnternetten çekiliyor...";
     });
 
-    final headers = {
-      "User-Agent": "Mozilla/5.0 (Linux; Android 14) AppleWebKit/537.36 Chrome/124.0.0.0 Mobile"
-    };
-
-    // 1. Kaynak: Petrol Ofisi İl Bazlı Güncel Akaryakıt Fiyatları
     try {
-      final poUrl = Uri.parse("https://www.petrolofisi.com.tr/akaryakit-fiyatlari/${city.toLowerCase()}-akaryakit-fiyatlari");
-      final resPo = await http.get(poUrl, headers: headers).timeout(const Duration(seconds: 8));
-      if (resPo.statusCode == 200) {
-        final parsedPo = _extractPetrolOfisiPrices(resPo.body);
-        if (parsedPo != null) {
-          String saat = "${DateTime.now().hour.toString().padLeft(2, '0')}:${DateTime.now().minute.toString().padLeft(2, '0')}";
-          await _savePrices(parsedPo['lpg']!, parsedPo['benzin']!, _lpgModu, city, "Canlı PO ($city $saat)");
-          setState(() => _fiyatCekiliyor = false);
-          return true;
-        }
-      }
-    } catch (_) {}
+      final url = Uri.parse("https://www.tppd.com.tr/tr/akaryakit-fiyatlari?il=${city.toLowerCase()}");
+      final res = await http.get(url, headers: {
+        "User-Agent": "Mozilla/5.0 (Linux; Android 14) AppleWebKit/537.36 Chrome/124.0.0.0 Mobile"
+      }).timeout(const Duration(seconds: 6));
 
-    // 2. Yedek Kaynak: Doviz.com İl Bazlı Akaryakıt Fiyatları
-    try {
-      final dovizUrl = Uri.parse("https://www.doviz.com/akaryakit-fiyatlari/${city.toLowerCase()}");
-      final resDoviz = await http.get(dovizUrl, headers: headers).timeout(const Duration(seconds: 8));
-      if (resDoviz.statusCode == 200) {
-        final parsedDoviz = _extractFallbackPrices(resDoviz.body);
-        if (parsedDoviz != null) {
+      if (res.statusCode == 200) {
+        final parsed = _extractPricesFromHtml(res.body);
+        if (parsed != null) {
           String saat = "${DateTime.now().hour.toString().padLeft(2, '0')}:${DateTime.now().minute.toString().padLeft(2, '0')}";
-          await _savePrices(parsedDoviz['lpg']!, parsedDoviz['benzin']!, _lpgModu, city, "Canlı ($city $saat)");
+          await _savePrices(parsed['lpg']!, parsed['benzin']!, _lpgModu, city, "Canlı ($city $saat)");
           setState(() => _fiyatCekiliyor = false);
           return true;
         }
@@ -409,31 +179,16 @@ class _DashboardScreenState extends State<DashboardScreen> {
     return false;
   }
 
-  Map<String, double>? _extractPetrolOfisiPrices(String html) {
-    final rowMatch = RegExp(r'<tr\s+class="price-row[^>]*>(.*?)</tr>', dotAll: true).firstMatch(html);
-    if (rowMatch == null) return null;
-    final spanMatches = RegExp(r'<span\s+class="with-tax">\s*([\d.,]+)\s*</span>').allMatches(rowMatch.group(1)!);
-    final prices = <double>[];
-    for (final m in spanMatches) {
-      final val = double.tryParse(m.group(1)!.replaceAll(',', '.'));
-      if (val != null && val > 5.0) prices.add(val);
-    }
-    if (prices.length >= 2) {
-      return {'benzin': prices.first, 'lpg': prices.last};
-    }
-    return null;
-  }
-
-  Map<String, double>? _extractFallbackPrices(String html) {
-    final regex = RegExp(r'(\d{2,3}[.,]\d{2})');
+  Map<String, double>? _extractPricesFromHtml(String html) {
+    final regex = RegExp(r'(\d{2}[.,]\d{2})');
     final matches = regex.allMatches(html);
     List<double> benzins = [];
     List<double> lpgs = [];
     for (final m in matches) {
       double? val = double.tryParse(m.group(1)!.replaceAll(',', '.'));
       if (val != null) {
-        if (val >= 60.0 && val <= 92.0) benzins.add(val);
-        else if (val >= 30.0 && val <= 55.0) lpgs.add(val);
+        if (val >= 36.0 && val <= 65.0) benzins.add(val);
+        else if (val >= 18.0 && val <= 35.5) lpgs.add(val);
       }
     }
     if (benzins.isNotEmpty && lpgs.isNotEmpty) return {'benzin': benzins.first, 'lpg': lpgs.first};
@@ -451,18 +206,51 @@ class _DashboardScreenState extends State<DashboardScreen> {
     await _tts.speak(text);
   }
 
-  Future<void> _initBluetooth() async {
-    await [Permission.bluetooth, Permission.bluetoothConnect, Permission.bluetoothScan, Permission.location].request();
-    List<BluetoothDevice> bonded = await FlutterBluetoothSerial.instance.getBondedDevices();
-    setState(() {
-      _devices = bonded;
-      if (_devices.isNotEmpty) {
-        _selectedDevice = _devices.firstWhere(
-          (d) => (d.name ?? "").toUpperCase().contains("OBD") || (d.name ?? "").toUpperCase().contains("ELM"),
-          orElse: () => _devices.first,
-        );
-      }
-    });
+  Future<void> _initBluetoothAndLocation() async {
+    await [
+      Permission.bluetooth,
+      Permission.bluetoothConnect,
+      Permission.bluetoothScan,
+      Permission.location,
+      Permission.locationAlways,
+    ].request();
+
+    try {
+      List<BluetoothDevice> bonded = await FlutterBluetoothSerial.instance.getBondedDevices();
+      setState(() {
+        _devices = bonded;
+        if (_devices.isNotEmpty) {
+          _selectedDevice = _devices.firstWhere(
+            (d) => (d.name ?? "").toUpperCase().contains("OBD") || (d.name ?? "").toUpperCase().contains("ELM"),
+            orElse: () => _devices.first,
+          );
+        }
+      });
+    } catch (e) {
+      print("Bluetooth cihaz tarama hatası: $e");
+    }
+
+    _startLocationTracking();
+  }
+
+  void _startLocationTracking() async {
+    LocationPermission permission = await Geolocator.checkPermission();
+    if (permission == LocationPermission.denied) {
+      permission = await Geolocator.requestPermission();
+    }
+    if (permission == LocationPermission.whileInUse || permission == LocationPermission.always) {
+      const locationSettings = LocationSettings(
+        accuracy: LocationAccuracy.high,
+        distanceFilter: 5,
+      );
+      _gpsSubscription = Geolocator.getPositionStream(locationSettings: locationSettings).listen((pos) {
+        if (_isConnected && _speed > 2) {
+          setState(() {
+            _routePoints.add(LatLng(pos.latitude, pos.longitude));
+          });
+        }
+      });
+    }
   }
 
   Future<void> _connectOBD() async {
@@ -474,137 +262,123 @@ class _DashboardScreenState extends State<DashboardScreen> {
     });
 
     try {
-      _connection = await BluetoothConnection.toAddress(_selectedDevice!.address);
+      _connection = await BluetoothConnection.toAddress(_selectedDevice!.address)
+          .timeout(const Duration(seconds: 10));
+
       setState(() {
         _isConnected = true;
         _isConnecting = false;
         _lastCalcTime = DateTime.now();
-        if (_toplamYolculukKm < 0.01 && _toplamYolculukLitre < 0.01) {
-          _aktifSurusBaslangic = _formatNow();
-        }
         _bannerText = "BAĞLANDI - A16LET HAZIR";
         _bannerColor = Colors.green.shade700;
       });
+
       _speak("Insignia asistanı bağlandı");
+
+      // Veri akış dinleyicisi
+      _connection!.input!.listen(
+        _handleIncomingData,
+        onDone: _handleDisconnection,
+        onError: (err) => _handleDisconnection(),
+        cancelOnError: true,
+      );
+
       _startObdLoop();
     } catch (e) {
-      setState(() {
-        _isConnected = false;
-        _isConnecting = false;
-        _bannerText = "BAĞLANTI HATASI!";
-        _bannerColor = Colors.red.shade800;
-      });
+      _handleDisconnection();
     }
   }
 
-  Future<void> _disconnectOBD() async {
-    await _finalizeAndSaveCurrentTrip(silent: true);
-    await _connection?.close();
+  void _handleIncomingData(Uint8List data) {
+    String chunk = ascii.decode(data, allowInvalid: true);
+    _rxStreamBuffer.write(chunk);
+
+    if (_rxStreamBuffer.toString().contains('>')) {
+      String response = _rxStreamBuffer.toString();
+      _rxStreamBuffer.clear();
+      if (_cmdCompleter != null && !_cmdCompleter!.isCompleted) {
+        _cmdCompleter!.complete(response.replaceAll(">", "").trim());
+      }
+    }
   }
 
-  String _rxBuffer = "";
+  void _handleDisconnection() {
+    setState(() {
+      _isConnected = false;
+      _isConnecting = false;
+      _bannerText = "OBD BAĞLANTISI KOPTU";
+      _bannerColor = Colors.red.shade900;
+    });
+    _connection?.dispose();
+    _connection = null;
+  }
 
   Future<String> _sendObdCommand(String cmd) async {
     if (_connection == null || !_connection!.isConnected) return "";
-    _rxBuffer = "";
-    _connection!.output.add(Uint8List.fromList(utf8.encode("$cmd\r")));
-    await _connection!.output.allSent;
 
-    int elapsed = 0;
-    while (!(_rxBuffer.contains(">")) && elapsed < 320) {
-      await Future.delayed(const Duration(milliseconds: 20));
-      elapsed += 20;
+    if (_cmdCompleter != null && !_cmdCompleter!.isCompleted) {
+      await _cmdCompleter!.future.timeout(const Duration(milliseconds: 300), onTimeout: () => "");
     }
-    return _rxBuffer.replaceAll("\r", " ").replaceAll("\n", " ").replaceAll(">", "").trim();
-  }
 
-  // DTC ARIZA KODU OKUMA (Mod 03)
-  Future<void> _readDtcCodes() async {
-    if (!_isConnected) return;
-    String yanit = await _sendObdCommand("03");
-    setState(() {
-      if (yanit.contains("43") && !yanit.contains("NODATA")) {
-        _arizaKodlari = "Kayıtlı Arıza Var (Detay: $yanit)";
-      } else {
-        _arizaKodlari = "Arıza Yok / Temiz";
-      }
-    });
-  }
-
-  // DTC ARIZA KODU SİLME (Mod 04)
-  Future<void> _clearDtcCodes() async {
-    if (!_isConnected) return;
-    await _sendObdCommand("04");
-    setState(() => _arizaKodlari = "Arızalar Silindi");
-    _speak("Arıza lambası sıfırlandı");
+    _cmdCompleter = Completer<String>();
+    try {
+      _connection!.output.add(Uint8List.fromList(utf8.encode("$cmd\r")));
+      await _connection!.output.allSent;
+      return await _cmdCompleter!.future.timeout(const Duration(milliseconds: 450), onTimeout: () => "");
+    } catch (_) {
+      return "";
+    }
   }
 
   void _startObdLoop() async {
-    _connection!.input!.listen((Uint8List data) {
-      _rxBuffer += ascii.decode(data, allowInvalid: true);
-    }).onDone(() async {
-      // Kontak kapandığında / bağlantı koptuğunda sürüşü otomatik kaydet
-      await _finalizeAndSaveCurrentTrip(silent: true);
-      if (mounted) {
-        setState(() {
-          _isConnected = false;
-          _bannerText = "OBD BAĞLANTISI KOPTU (SÜRÜŞ KAYDEDİLDİ)";
-          _bannerColor = Colors.red.shade900;
-        });
-      }
-    });
-
-    for (String initCmd in ["ATZ", "ATE0", "ATL0", "ATS1", "ATH0", "ATSP0"]) {
+    for (String initCmd in ["ATZ", "ATE0", "ATL0", "ATS0", "ATH0", "ATSP0"]) {
       await _sendObdCommand(initCmd);
-      await Future.delayed(const Duration(milliseconds: 70));
+      await Future.delayed(const Duration(milliseconds: 50));
     }
 
     int loopCount = 0;
     while (_isConnected) {
-      _parsePid(await _sendObdCommand("010C"), "0C", (a, b) => _rpm = ((a * 256) + b) ~/ 4);
-      _parsePid(await _sendObdCommand("010D"), "0D", (a, _) => _speed = a);
-      _parsePid(await _sendObdCommand("0104"), "04", (a, _) => _load = (a * 100) ~/ 255);
-      _parsePid(await _sendObdCommand("010B"), "0B", (a, _) => _mapKpa = a);
-      _parsePid(await _sendObdCommand("0110"), "10", (a, b) => _mafGrams = ((a * 256) + b) / 100.0);
+      try {
+        _parsePid(await _sendObdCommand("010C"), "0C", (a, b) => _rpm = ((a * 256) + b) ~/ 4);
+        _parsePid(await _sendObdCommand("010D"), "0D", (a, _) => _speed = a);
+        _parsePid(await _sendObdCommand("0104"), "04", (a, _) => _load = (a * 100) ~/ 255);
+        _parsePid(await _sendObdCommand("010B"), "0B", (a, _) => _mapKpa = a);
+        _parsePid(await _sendObdCommand("0110"), "10", (a, b) => _mafGrams = ((a * 256) + b) / 100.0);
 
-      if (loopCount % 20 == 0) {
-        _parsePid(await _sendObdCommand("0105"), "05", (a, _) => _coolantTemp = a - 40);
-        if (loopCount % 60 == 0) await _readDtcCodes();
+        if (loopCount % 25 == 0) {
+          _parsePid(await _sendObdCommand("0105"), "05", (a, _) => _coolantTemp = a - 40);
+        }
+        loopCount++;
+
+        _calculateFuelAndCost();
+        _evaluateShiftLogic();
+        if (mounted) setState(() {});
+      } catch (e) {
+        print("Döngü hatası: $e");
       }
-      loopCount++;
-
-      _calculateFuelAndCost();
-      _evaluateShiftLogic();
-      if (mounted) setState(() {});
+      await Future.delayed(const Duration(milliseconds: 25));
     }
   }
 
   void _parsePid(String response, String expectedPid, Function(int a, int b) onParsed) {
-    List<String> parts = response.split(RegExp(r'\s+'));
-    int idx = parts.indexOf("41");
-    if (idx != -1 && parts.length > idx + 2 && parts[idx + 1] == expectedPid) {
-      int? a = int.tryParse(parts[idx + 2], radix: 16);
-      int b = (parts.length > idx + 3) ? (int.tryParse(parts[idx + 3], radix: 16) ?? 0) : 0;
-      if (a != null) onParsed(a, b);
-    }
+    if (response.isEmpty) return;
+    try {
+      List<String> parts = response.replaceAll("\r", " ").replaceAll("\n", " ").split(RegExp(r'\s+'));
+      int idx = parts.indexOf("41");
+      if (idx != -1 && parts.length > idx + 2 && parts[idx + 1] == expectedPid) {
+        int? a = int.tryParse(parts[idx + 2], radix: 16);
+        int b = (parts.length > idx + 3) ? (int.tryParse(parts[idx + 3], radix: 16) ?? 0) : 0;
+        if (a != null) onParsed(a, b);
+      }
+    } catch (_) {}
   }
 
   void _calculateFuelAndCost() {
     DateTime now = DateTime.now();
-    double dtSeconds = now.difference(_lastCalcTime).inMilliseconds / 1000.0;
-    double dtHours = dtSeconds / 3600.0;
+    double dtHours = now.difference(_lastCalcTime).inMilliseconds / 3600000.0;
     _lastCalcTime = now;
 
     double boostBar = (_mapKpa - 100) / 100.0;
-
-    // Maksimum sürüş değerlerini takip et
-    if (_speed > _maksHiz) _maksHiz = _speed;
-    if (_rpm > _maksDevir) _maksDevir = _rpm;
-    if (boostBar > _maksBoostBar) _maksBoostBar = boostBar;
-
-    if (dtSeconds > 0 && dtSeconds < 36.0 && (_rpm > 400 || _speed > 0)) {
-      _aktifSurusSuresiSaniye += dtSeconds;
-    }
 
     if (_speed > 15 && _currentGear > 0 && _rpm > 1400 && _load < 18 && _mapKpa < 38) {
       _cutOffAktif = true;
@@ -612,9 +386,7 @@ class _DashboardScreenState extends State<DashboardScreen> {
       _anlikLitreSaat = 0.0;
       _anlikLitre100Km = 0.0;
       _anlikTlKm = 0.0;
-      if (dtHours > 0 && dtHours < 0.01) {
-        _toplamYolculukKm += _speed * dtHours;
-      }
+      if (dtHours > 0 && dtHours < 0.01) _toplamYolculukKm += _speed * dtHours;
       return;
     }
     _cutOffAktif = false;
@@ -647,15 +419,8 @@ class _DashboardScreenState extends State<DashboardScreen> {
 
     if (dtHours > 0 && dtHours < 0.01) {
       double harcananLitre = _anlikLitreSaat * dtHours;
-      _toplamYolculukLitre += harcananLitre;
       _toplamYolculukTl += harcananLitre * aktifBirimFiyat;
       _toplamYolculukKm += _speed * dtHours;
-    }
-
-    // Her 15 saniyede bir taslağı yedekle (uygulama kapanırsa veri kaybolmasın)
-    if (now.difference(_lastDraftSaveTime).inSeconds >= 15) {
-      _lastDraftSaveTime = now;
-      _saveDraftTrip();
     }
   }
 
@@ -761,301 +526,7 @@ class _DashboardScreenState extends State<DashboardScreen> {
     }
   }
 
-  void _showTripHistorySheet() {
-    showModalBottomSheet(
-      context: context,
-      isScrollControlled: true,
-      backgroundColor: const Color(0xFF141416),
-      shape: const RoundedRectangleBorder(
-        borderRadius: BorderRadius.vertical(top: Radius.circular(20)),
-      ),
-      builder: (ctx) => StatefulBuilder(
-        builder: (context, setSheetState) {
-          double genelKm = 0.0;
-          double genelLitre = 0.0;
-          double genelTl = 0.0;
-          int genelSure = 0;
-
-          for (final s in _gecmisSurusler) {
-            genelKm += s.distanceKm;
-            genelLitre += s.fuelLiters;
-            genelTl += s.totalCostTl;
-            genelSure += s.durationSeconds;
-          }
-
-          final double genelOrtL100 = genelKm >= 0.05 ? (genelLitre / genelKm) * 100.0 : 0.0;
-          final double genelOrtTlKm = genelKm >= 0.05 ? genelTl / genelKm : 0.0;
-          final bool aktifVeriVar = _toplamYolculukKm >= 0.02 || _toplamYolculukLitre >= 0.01;
-
-          return DraggableScrollableSheet(
-            expand: false,
-            initialChildSize: 0.85,
-            minChildSize: 0.5,
-            maxChildSize: 0.95,
-            builder: (_, scrollController) => Padding(
-              padding: const EdgeInsets.all(14.0),
-              child: Column(
-                crossAxisAlignment: CrossAxisAlignment.start,
-                children: [
-                  Row(
-                    mainAxisAlignment: MainAxisAlignment.spaceBetween,
-                    children: [
-                      const Row(
-                        children: [
-                          Icon(Icons.history, color: Colors.amberAccent),
-                          SizedBox(width: 8),
-                          Text(
-                            "GEÇMİŞ SÜRÜŞLER & MALİYET ÖZETİ",
-                            style: TextStyle(fontSize: 15, fontWeight: FontWeight.bold),
-                          ),
-                        ],
-                      ),
-                      Row(
-                        children: [
-                          if (_gecmisSurusler.isNotEmpty)
-                            IconButton(
-                              tooltip: "Tüm Geçmişi Sil",
-                              icon: const Icon(Icons.delete_sweep, color: Colors.redAccent),
-                              onPressed: () async {
-                                setState(() => _gecmisSurusler.clear());
-                                await _saveTripHistoryList();
-                                setSheetState(() {});
-                              },
-                            ),
-                          IconButton(
-                            icon: const Icon(Icons.close),
-                            onPressed: () => Navigator.pop(ctx),
-                          ),
-                        ],
-                      ),
-                    ],
-                  ),
-                  const SizedBox(height: 8),
-
-                  // Aktif Sürüşü Şimdi Kaydet Butonu
-                  if (aktifVeriVar)
-                    Container(
-                      margin: const EdgeInsets.only(bottom: 10),
-                      padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
-                      decoration: BoxDecoration(
-                        color: Colors.teal.shade900.withOpacity(0.6),
-                        borderRadius: BorderRadius.circular(12),
-                        border: Border.all(color: Colors.tealAccent.withOpacity(0.5)),
-                      ),
-                      child: Row(
-                        children: [
-                          Expanded(
-                            child: Column(
-                              crossAxisAlignment: CrossAxisAlignment.start,
-                              children: [
-                                const Text(
-                                  "AKTİF SÜRÜŞ DEVAM EDİYOR",
-                                  style: TextStyle(color: Colors.tealAccent, fontSize: 11, fontWeight: FontWeight.bold),
-                                ),
-                                const SizedBox(height: 2),
-                                Text(
-                                  "${_toplamYolculukKm.toStringAsFixed(2)} km • ${_toplamYolculukLitre.toStringAsFixed(2)} L • ${_toplamYolculukTl.toStringAsFixed(2)} ₺",
-                                  style: const TextStyle(color: Colors.white, fontSize: 13, fontWeight: FontWeight.bold),
-                                ),
-                              ],
-                            ),
-                          ),
-                          ElevatedButton.icon(
-                            style: ElevatedButton.styleFrom(backgroundColor: Colors.green.shade700),
-                            icon: const Icon(Icons.save, size: 16),
-                            label: const Text("BİTİR & KAYDET", style: TextStyle(fontSize: 12, fontWeight: FontWeight.bold)),
-                            onPressed: () async {
-                              await _finalizeAndSaveCurrentTrip();
-                              setSheetState(() {});
-                            },
-                          ),
-                        ],
-                      ),
-                    ),
-
-                  // Tüm Zamanlar Genel Toplam Kartı
-                  Container(
-                    width: double.infinity,
-                    padding: const EdgeInsets.all(12),
-                    decoration: BoxDecoration(
-                      gradient: const LinearGradient(
-                        colors: [Color(0xFF1F2937), Color(0xFF111827)],
-                      ),
-                      borderRadius: BorderRadius.circular(14),
-                      border: Border.all(color: Colors.amberAccent.withOpacity(0.35)),
-                    ),
-                    child: Column(
-                      crossAxisAlignment: CrossAxisAlignment.start,
-                      children: [
-                        Row(
-                          mainAxisAlignment: MainAxisAlignment.spaceBetween,
-                          children: [
-                            Text(
-                              "TÜM ZAMANLAR TOPLAMI (${_gecmisSurusler.length} Sürüş)",
-                              style: const TextStyle(color: Colors.amberAccent, fontSize: 11, fontWeight: FontWeight.bold),
-                            ),
-                            Text(
-                              "Toplam Süre: ${_formatDuration(genelSure)}",
-                              style: const TextStyle(color: Colors.white70, fontSize: 11),
-                            ),
-                          ],
-                        ),
-                        const Divider(color: Colors.white24, height: 14),
-                        Row(
-                          mainAxisAlignment: MainAxisAlignment.spaceBetween,
-                          children: [
-                            _summaryItem("TOPLAM YOL", "${genelKm.toStringAsFixed(1)} km", Colors.white),
-                            _summaryItem("HARCANAN YAKIT", "${genelLitre.toStringAsFixed(2)} L", Colors.cyanAccent),
-                            _summaryItem("TOPLAM TUTAR", "${genelTl.toStringAsFixed(2)} ₺", Colors.greenAccent),
-                          ],
-                        ),
-                        const SizedBox(height: 8),
-                        Row(
-                          mainAxisAlignment: MainAxisAlignment.spaceBetween,
-                          children: [
-                            Text(
-                              "Ortalama Tüketim: ${genelOrtL100.toStringAsFixed(1)} L / 100km",
-                              style: const TextStyle(color: Colors.white70, fontSize: 11, fontWeight: FontWeight.w600),
-                            ),
-                            Text(
-                              "Ortalama: ${genelOrtTlKm.toStringAsFixed(2)} ₺ / km",
-                              style: const TextStyle(color: Colors.amberAccent, fontSize: 11, fontWeight: FontWeight.w600),
-                            ),
-                          ],
-                        ),
-                      ],
-                    ),
-                  ),
-                  const SizedBox(height: 12),
-
-                  Expanded(
-                    child: _gecmisSurusler.isEmpty
-                        ? const Center(
-                            child: Text(
-                              "Henüz kaydedilmiş sürüş bulunmuyor.\nOBD bağlantısı kesildiğinde veya 'KAYDET' butonuna\nbastığınızda sürüşleriniz burada listelenir.",
-                              textAlign: TextAlign.center,
-                              style: TextStyle(color: Colors.white54, fontSize: 13),
-                            ),
-                          )
-                        : ListView.builder(
-                            controller: scrollController,
-                            itemCount: _gecmisSurusler.length,
-                            itemBuilder: (context, index) {
-                              final item = _gecmisSurusler[index];
-                              return Container(
-                                margin: const EdgeInsets.only(bottom: 10),
-                                padding: const EdgeInsets.all(12),
-                                decoration: BoxDecoration(
-                                  color: const Color(0xFF1C1C1E),
-                                  borderRadius: BorderRadius.circular(12),
-                                  border: Border.all(color: Colors.white12),
-                                ),
-                                child: Column(
-                                  crossAxisAlignment: CrossAxisAlignment.start,
-                                  children: [
-                                    Row(
-                                      mainAxisAlignment: MainAxisAlignment.spaceBetween,
-                                      children: [
-                                        Row(
-                                          children: [
-                                            const Icon(Icons.calendar_today, size: 13, color: Colors.white70),
-                                            const SizedBox(width: 6),
-                                            Text(
-                                              item.dateStr,
-                                              style: const TextStyle(fontWeight: FontWeight.bold, fontSize: 13),
-                                            ),
-                                            const SizedBox(width: 8),
-                                            Container(
-                                              padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 2),
-                                              decoration: BoxDecoration(
-                                                color: item.fuelType == "LPG"
-                                                    ? Colors.green.shade900
-                                                    : Colors.blue.shade900,
-                                                borderRadius: BorderRadius.circular(6),
-                                              ),
-                                              child: Text(
-                                                "${item.fuelType} (${item.unitPriceTl.toStringAsFixed(2)} ₺)",
-                                                style: const TextStyle(fontSize: 10, fontWeight: FontWeight.bold),
-                                              ),
-                                            ),
-                                          ],
-                                        ),
-                                        InkWell(
-                                          onTap: () async {
-                                            setState(() => _gecmisSurusler.removeAt(index));
-                                            await _saveTripHistoryList();
-                                            setSheetState(() {});
-                                          },
-                                          child: const Icon(Icons.delete_outline, size: 18, color: Colors.white54),
-                                        ),
-                                      ],
-                                    ),
-                                    const Divider(color: Colors.white12, height: 14),
-                                    Row(
-                                      mainAxisAlignment: MainAxisAlignment.spaceBetween,
-                                      children: [
-                                        _summaryItem("MESAFE", "${item.distanceKm.toStringAsFixed(2)} km", Colors.white),
-                                        _summaryItem(
-                                          "YAKIT (${item.avgLitersPer100Km.toStringAsFixed(1)} L/100)",
-                                          "${item.fuelLiters.toStringAsFixed(2)} L",
-                                          Colors.cyanAccent,
-                                        ),
-                                        _summaryItem(
-                                          "TUTAR (${item.avgTlPerKm.toStringAsFixed(2)} ₺/km)",
-                                          "${item.totalCostTl.toStringAsFixed(2)} ₺",
-                                          Colors.amberAccent,
-                                        ),
-                                      ],
-                                    ),
-                                    const SizedBox(height: 8),
-                                    Row(
-                                      mainAxisAlignment: MainAxisAlignment.spaceBetween,
-                                      children: [
-                                        Text(
-                                          "⏱ Süre: ${_formatDuration(item.durationSeconds)}",
-                                          style: const TextStyle(color: Colors.white54, fontSize: 11),
-                                        ),
-                                        Text(
-                                          "🚀 Maks: ${item.maxSpeed} km/s",
-                                          style: const TextStyle(color: Colors.white54, fontSize: 11),
-                                        ),
-                                        Text(
-                                          "🔥 Turbo: ${item.maxBoostBar >= 0 ? '+' : ''}${item.maxBoostBar.toStringAsFixed(2)} bar",
-                                          style: const TextStyle(color: Colors.white54, fontSize: 11),
-                                        ),
-                                        Text(
-                                          "⚙️ ${item.maxRpm} d/d",
-                                          style: const TextStyle(color: Colors.white54, fontSize: 11),
-                                        ),
-                                      ],
-                                    ),
-                                  ],
-                                ),
-                              );
-                            },
-                          ),
-                  ),
-                ],
-              ),
-            ),
-          );
-        },
-      ),
-    );
-  }
-
-  Widget _summaryItem(String label, String value, Color color) {
-    return Column(
-      crossAxisAlignment: CrossAxisAlignment.start,
-      children: [
-        Text(label, style: const TextStyle(color: Colors.white54, fontSize: 10, fontWeight: FontWeight.bold)),
-        const SizedBox(height: 2),
-        Text(value, style: TextStyle(color: color, fontSize: 16, fontWeight: FontWeight.w900)),
-      ],
-    );
-  }
-
-  void _showPriceAndDtcDialog() {
+  void _showPriceDialog() {
     final lpgCtrl = TextEditingController(text: _lpgFiyati.toStringAsFixed(2));
     final benzinCtrl = TextEditingController(text: _benzinFiyati.toStringAsFixed(2));
     bool tempIsLpg = _lpgModu;
@@ -1066,14 +537,14 @@ class _DashboardScreenState extends State<DashboardScreen> {
       builder: (ctx) => StatefulBuilder(
         builder: (context, setDialogState) => AlertDialog(
           backgroundColor: const Color(0xFF1C1C1E),
-          title: const Text("Yakıt, Şehir ve Arıza Menüsü"),
+          title: const Text("Yakıt ve Şehir Ayarları"),
           content: SingleChildScrollView(
             child: Column(
               mainAxisSize: MainAxisSize.min,
               children: [
                 SwitchListTile(
                   contentPadding: EdgeInsets.zero,
-                  title: Text(tempIsLpg ? "Aktif Yakıt: LPG (Otogaz)" : "Aktif Yakıt: Benzin"),
+                  title: Text(tempIsLpg ? "Aktif Yakıt: LPG" : "Aktif Yakıt: Benzin"),
                   subtitle: Text(_fiyatGuncellemeDurumu, style: const TextStyle(color: Colors.amberAccent, fontSize: 12)),
                   value: tempIsLpg,
                   activeColor: Colors.greenAccent,
@@ -1085,7 +556,7 @@ class _DashboardScreenState extends State<DashboardScreen> {
                     Expanded(
                       child: DropdownButtonFormField<String>(
                         value: tempSehir,
-                        decoration: const InputDecoration(labelText: "Şehir Seçin", border: OutlineInputBorder()),
+                        decoration: const InputDecoration(labelText: "Şehir", border: OutlineInputBorder()),
                         items: _sehirListesi.map((s) => DropdownMenuItem(value: s, child: Text(s))).toList(),
                         onChanged: (val) {
                           if (val != null) setDialogState(() => tempSehir = val);
@@ -1094,11 +565,8 @@ class _DashboardScreenState extends State<DashboardScreen> {
                     ),
                     const SizedBox(width: 8),
                     ElevatedButton.icon(
-                      style: ElevatedButton.styleFrom(
-                        backgroundColor: Colors.teal.shade700,
-                        padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 16),
-                      ),
-                      icon: const Icon(Icons.cloud_download, size: 18),
+                      style: ElevatedButton.styleFrom(backgroundColor: Colors.teal.shade700),
+                      icon: const Icon(Icons.cloud_download, size: 16),
                       label: const Text("ÇEK"),
                       onPressed: () async {
                         bool ok = await _fetchLiveFuelPrices(tempSehir);
@@ -1124,48 +592,25 @@ class _DashboardScreenState extends State<DashboardScreen> {
                   keyboardType: const TextInputType.numberWithOptions(decimal: true),
                   decoration: const InputDecoration(labelText: "Benzin Fiyatı (TL)", border: OutlineInputBorder()),
                 ),
-                const Divider(color: Colors.white24, height: 20),
-                Text("Motor Arıza Durumu: $_arizaKodlari", style: const TextStyle(color: Colors.orangeAccent, fontSize: 12)),
-                const SizedBox(height: 8),
-                Row(
-                  mainAxisAlignment: MainAxisAlignment.spaceEvenly,
-                  children: [
-                    ElevatedButton.icon(
-                      style: ElevatedButton.styleFrom(backgroundColor: Colors.blueGrey.shade800),
-                      icon: const Icon(Icons.search, size: 16),
-                      label: const Text("KONTROL ET"),
-                      onPressed: () => _readDtcCodes(),
-                    ),
-                    ElevatedButton.icon(
-                      style: ElevatedButton.styleFrom(backgroundColor: Colors.red.shade800),
-                      icon: const Icon(Icons.delete_forever, size: 16),
-                      label: const Text("ARIZAYI SİL"),
-                      onPressed: () {
-                        _clearDtcCodes();
-                        Navigator.pop(ctx);
-                      },
-                    ),
-                  ],
-                ),
               ],
             ),
           ),
           actions: [
             TextButton(
-              onPressed: () async {
-                await _resetCurrentTripWithoutSaving();
-                if (context.mounted) Navigator.pop(ctx);
-              },
-              child: const Text("SAYACI SIFIRLA", style: TextStyle(color: Colors.redAccent)),
+              onPressed: () => Navigator.pop(ctx),
+              child: const Text("İptal"),
             ),
             ElevatedButton(
-              onPressed: () {
-                double lpg = double.tryParse(lpgCtrl.text.replaceAll(',', '.')) ?? _lpgFiyati;
-                double benzin = double.tryParse(benzinCtrl.text.replaceAll(',', '.')) ?? _benzinFiyati;
-                _savePrices(lpg, benzin, tempIsLpg, tempSehir, "Güncel");
+              style: ElevatedButton.styleFrom(backgroundColor: Colors.blueAccent),
+              onPressed: () async {
+                double? l = double.tryParse(lpgCtrl.text);
+                double? b = double.tryParse(benzinCtrl.text);
+                if (l != null && b != null) {
+                  await _savePrices(l, b, tempIsLpg, tempSehir, "Manuel girildi");
+                }
                 Navigator.pop(ctx);
               },
-              child: const Text("KAYDET"),
+              child: const Text("Kaydet"),
             ),
           ],
         ),
@@ -1176,208 +621,139 @@ class _DashboardScreenState extends State<DashboardScreen> {
   @override
   Widget build(BuildContext context) {
     double boostBar = (_mapKpa - 100) / 100.0;
-    bool suAnLpgde = _lpgModu && (_coolantTemp >= 40);
-    String aktifYakitEtiketi = _lpgModu
-        ? (suAnLpgde ? "LPG (${_lpgFiyati.toStringAsFixed(2)} ₺)" : "SOĞUK: BENZİNDE")
-        : "BENZİN (${_benzinFiyati.toStringAsFixed(2)} ₺)";
-
     return Scaffold(
       appBar: AppBar(
-        backgroundColor: const Color(0xFF1C1C1E),
-        title: const Text("INSIGNIA 1.6T", style: TextStyle(fontWeight: FontWeight.bold, fontSize: 15)),
+        title: const Text("Insignia A16LET Telemetri", style: TextStyle(fontSize: 18, fontWeight: FontWeight.bold)),
         actions: [
-          TextButton.icon(
-            onPressed: _showTripHistorySheet,
-            icon: const Icon(Icons.history, color: Colors.cyanAccent, size: 18),
-            label: Text(
-              "GEÇMİŞ (${_gecmisSurusler.length})",
-              style: const TextStyle(color: Colors.cyanAccent, fontWeight: FontWeight.bold, fontSize: 11),
-            ),
-          ),
-          TextButton.icon(
-            onPressed: _showPriceAndDtcDialog,
-            icon: _fiyatCekiliyor
-                ? const SizedBox(width: 14, height: 14, child: CircularProgressIndicator(strokeWidth: 2, color: Colors.amberAccent))
-                : const Icon(Icons.local_gas_station, color: Colors.amberAccent, size: 18),
-            label: Text(
-              "${_lpgModu ? 'LPG' : 'BENZİN'} ($_seciliSehir)",
-              style: const TextStyle(color: Colors.amberAccent, fontWeight: FontWeight.bold, fontSize: 11),
-            ),
+          IconButton(
+            icon: const Icon(Icons.warning_amber_rounded, color: Colors.amber),
+            tooltip: "Arıza Kodları (DTC)",
+            onPressed: () {
+              Navigator.push(
+                context,
+                MaterialPageRoute(
+                  builder: (context) => DtcScreen(
+                    sendObdCommand: _sendObdCommand,
+                    isConnected: _isConnected,
+                  ),
+                ),
+              );
+            },
           ),
           IconButton(
-            icon: Icon(_sesAktif ? Icons.volume_up : Icons.volume_off, color: _sesAktif ? Colors.greenAccent : Colors.grey),
-            onPressed: () => setState(() => _sesAktif = !_sesAktif),
+            icon: const Icon(Icons.map_outlined, color: Colors.lightBlueAccent),
+            tooltip: "Rota Haritası",
+            onPressed: () {
+              Navigator.push(
+                context,
+                MaterialPageRoute(
+                  builder: (context) => RouteMapScreen(routePoints: _routePoints),
+                ),
+              );
+            },
+          ),
+          IconButton(
+            icon: const Icon(Icons.local_gas_station),
+            tooltip: "Fiyat Ayarları",
+            onPressed: _showPriceDialog,
           ),
         ],
       ),
-      body: Padding(
-        padding: const EdgeInsets.all(10.0),
+      body: SafeArea(
         child: Column(
           children: [
-            Row(
-              children: [
-                Expanded(
-                  child: DropdownButtonHideUnderline(
-                    child: DropdownButton<BluetoothDevice>(
-                      isExpanded: true,
-                      hint: const Text("Eşleşmiş OBD2 Seçin"),
-                      value: _selectedDevice,
-                      items: _devices.map((d) => DropdownMenuItem(value: d, child: Text(d.name ?? d.address))).toList(),
-                      onChanged: _isConnected ? null : (val) => setState(() => _selectedDevice = val),
-                    ),
-                  ),
-                ),
-                const SizedBox(width: 8),
-                ElevatedButton(
-                  style: ElevatedButton.styleFrom(
-                    backgroundColor: _isConnected ? Colors.red.shade700 : Colors.blue.shade700,
-                    padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 12),
-                  ),
-                  onPressed: _isConnecting ? null : (_isConnected ? _disconnectOBD : _connectOBD),
-                  child: Text(_isConnected ? "KES & KAYDET" : "BAĞLAN", style: const TextStyle(fontWeight: FontWeight.bold)),
-                ),
-              ],
-            ),
-            const SizedBox(height: 6),
-
+            // Durum / Vites Bildirim Banner'ı
             Container(
               width: double.infinity,
-              padding: const EdgeInsets.symmetric(vertical: 12),
-              decoration: BoxDecoration(color: _bannerColor, borderRadius: BorderRadius.circular(10)),
+              padding: const EdgeInsets.symmetric(vertical: 14, horizontal: 16),
+              color: _bannerColor,
               child: Text(
                 _bannerText,
                 textAlign: TextAlign.center,
-                style: const TextStyle(fontSize: 16, fontWeight: FontWeight.w900, letterSpacing: 0.5),
+                style: const TextStyle(fontSize: 16, fontWeight: FontWeight.bold, letterSpacing: 0.5),
               ),
             ),
-            const SizedBox(height: 8),
 
-            Expanded(
+            // Bağlantı Çubuğu
+            Padding(
+              padding: const EdgeInsets.all(10.0),
               child: Row(
                 children: [
                   Expanded(
-                    flex: 5,
-                    child: Container(
-                      decoration: BoxDecoration(
-                        color: const Color(0xFF1C1C1E),
-                        borderRadius: BorderRadius.circular(16),
-                        border: Border.all(color: Colors.white12, width: 1.5),
+                    child: DropdownButtonFormField<BluetoothDevice>(
+                      value: _selectedDevice,
+                      decoration: const InputDecoration(
+                        isDense: true,
+                        contentPadding: EdgeInsets.symmetric(horizontal: 10, vertical: 8),
+                        border: OutlineInputBorder(),
                       ),
-                      child: Column(
-                        mainAxisAlignment: MainAxisAlignment.center,
-                        children: [
-                          const Text("AKTİF VİTES", style: TextStyle(color: Colors.grey, fontSize: 11, fontWeight: FontWeight.bold)),
-                          Text(
-                            _currentGear == 0 ? "N" : "$_currentGear",
-                            style: const TextStyle(fontSize: 78, fontWeight: FontWeight.w900, color: Colors.white),
-                          ),
-                          if (_currentGear > 0 && _currentGear < 6)
-                            Text(
-                              "${_currentGear + 1}. Vites: ${_nextGearRpm(_currentGear, _rpm)} d/d",
-                              style: const TextStyle(color: Colors.amberAccent, fontSize: 12, fontWeight: FontWeight.w600),
-                            ),
-                        ],
-                      ),
+                      hint: const Text("Cihaz Seç"),
+                      items: _devices.map((d) => DropdownMenuItem(value: d, child: Text(d.name ?? d.address, overflow: TextOverflow.ellipsis))).toList(),
+                      onChanged: _isConnected ? null : (d) => setState(() => _selectedDevice = d),
                     ),
                   ),
                   const SizedBox(width: 8),
-
-                  Expanded(
-                    flex: 6,
-                    child: GestureDetector(
-                      onTap: _showTripHistorySheet,
-                      child: Container(
-                        padding: const EdgeInsets.all(10),
-                        decoration: BoxDecoration(
-                          color: const Color(0xFF1C1C1E),
-                          borderRadius: BorderRadius.circular(16),
-                          border: Border.all(
-                            color: _cutOffAktif ? Colors.tealAccent : (_zenginKarisimAktif ? Colors.deepOrange : Colors.white12),
-                            width: 1.5,
-                          ),
-                        ),
-                        child: Column(
-                          mainAxisAlignment: MainAxisAlignment.spaceEvenly,
-                          children: [
-                            Text(aktifYakitEtiketi, style: const TextStyle(color: Colors.amberAccent, fontSize: 11, fontWeight: FontWeight.bold)),
-                            Text(
-                              _speed >= 5 ? "${_anlikTlKm.toStringAsFixed(2)} ₺" : "${_anlikTlKm.toStringAsFixed(1)} ₺",
-                              style: TextStyle(
-                                fontSize: 30,
-                                fontWeight: FontWeight.w900,
-                                color: _cutOffAktif ? Colors.greenAccent : (_zenginKarisimAktif ? Colors.redAccent : Colors.white),
-                              ),
-                            ),
-                            Text(
-                              _speed >= 5 ? "TL / Kilometre ($_fiyatGuncellemeDurumu)" : "TL / Saat (Rölanti)",
-                              textAlign: TextAlign.center,
-                              style: const TextStyle(color: Colors.white54, fontSize: 9),
-                            ),
-                            const Divider(color: Colors.white12, height: 6),
-                            Text(
-                              _speed >= 5 ? "${_anlikLitre100Km.toStringAsFixed(1)} L / 100km" : "${_anlikLitreSaat.toStringAsFixed(2)} L / saat",
-                              style: const TextStyle(color: Colors.cyanAccent, fontSize: 14, fontWeight: FontWeight.bold),
-                            ),
-                            Text(
-                              "${_toplamYolculukKm.toStringAsFixed(1)} km • ${_toplamYolculukLitre.toStringAsFixed(2)} L • ${_toplamYolculukTl.toStringAsFixed(1)} ₺",
-                              textAlign: TextAlign.center,
-                              style: const TextStyle(color: Colors.white, fontSize: 11, fontWeight: FontWeight.bold),
-                            ),
-                            SizedBox(
-                              height: 26,
-                              child: OutlinedButton.icon(
-                                style: OutlinedButton.styleFrom(
-                                  side: const BorderSide(color: Colors.cyanAccent, width: 1),
-                                  padding: const EdgeInsets.symmetric(horizontal: 8),
-                                ),
-                                icon: const Icon(Icons.save_alt, size: 13, color: Colors.cyanAccent),
-                                label: const Text(
-                                  "SÜRÜŞÜ KAYDET / GEÇMİŞ",
-                                  style: TextStyle(color: Colors.cyanAccent, fontSize: 9, fontWeight: FontWeight.bold),
-                                ),
-                                onPressed: () async {
-                                  if (_toplamYolculukKm >= 0.02 || _toplamYolculukLitre >= 0.01) {
-                                    await _finalizeAndSaveCurrentTrip();
-                                  } else {
-                                    _showTripHistorySheet();
-                                  }
-                                },
-                              ),
-                            ),
-                          ],
-                        ),
-                      ),
+                  ElevatedButton(
+                    style: ElevatedButton.styleFrom(
+                      backgroundColor: _isConnected ? Colors.red.shade800 : Colors.green.shade800,
                     ),
+                    onPressed: _isConnecting
+                        ? null
+                        : (_isConnected ? _handleDisconnection : _connectOBD),
+                    child: Text(_isConnected ? "Kopart" : "Bağlan"),
                   ),
                 ],
               ),
             ),
-            const SizedBox(height: 8),
 
-            Row(
-              children: [
-                _metricCard("DEVİR", "$_rpm", "d/dak", _rpm > 2400 && _ekonomiModu ? Colors.orangeAccent : Colors.white),
-                const SizedBox(width: 8),
-                _metricCard("HIZ", "$_speed", "km/s", Colors.white),
-              ],
+            // Ana Göstergeler
+            Expanded(
+              child: GridView.count(
+                crossAxisCount: 2,
+                childAspectRatio: 1.35,
+                padding: const EdgeInsets.symmetric(horizontal: 10),
+                crossAxisSpacing: 10,
+                mainAxisSpacing: 10,
+                children: [
+                  _buildMetricTile("DEVİR", "$_rpm", "RPM", Colors.redAccent),
+                  _buildMetricTile("HIZ", "$_speed", "KM/S", Colors.blueAccent),
+                  _buildMetricTile("VİTES", _currentGear == 0 ? "N" : "$_currentGear", "M32 WR", Colors.orangeAccent),
+                  _buildMetricTile("TURBO BASINCI", boostBar.toStringAsFixed(2), "BAR", boostBar > 0.4 ? Colors.deepOrange : Colors.cyan),
+                  _buildMetricTile("HARARET", "$_coolantTemp", "°C", _coolantTemp > 105 ? Colors.red : Colors.green),
+                  _buildMetricTile("MOTOR YÜKÜ", "%$_load", "LOAD", Colors.purpleAccent),
+                  _buildMetricTile("ANLIK MALİYET", _anlikTlKm.toStringAsFixed(2), "TL / KM", _cutOffAktif ? Colors.tealAccent : Colors.yellowAccent),
+                  _buildMetricTile("TOPLAM YOL", _toplamYolculukKm.toStringAsFixed(1), "KM", Colors.indigoAccent),
+                ],
+              ),
             ),
-            const SizedBox(height: 8),
-            Row(
-              children: [
-                _metricCard("TURBO (MAP)", "${boostBar >= 0 ? '+' : ''}${boostBar.toStringAsFixed(2)}", "bar", boostBar > 0.35 ? Colors.redAccent : Colors.greenAccent),
-                const SizedBox(width: 8),
-                _metricCard("MOTOR YÜKÜ", "%$_load", "Su: ${_coolantTemp}°C", Colors.cyanAccent),
-              ],
-            ),
-            const SizedBox(height: 8),
 
-            SegmentedButton<bool>(
-              segments: const [
-                ButtonSegment(value: true, label: Text("Şehir İçi Ekonomi"), icon: Icon(Icons.eco)),
-                ButtonSegment(value: false, label: Text("Performans (5850 RPM)"), icon: Icon(Icons.speed)),
-              ],
-              selected: {_ekonomiModu},
-              onSelectionChanged: (val) => setState(() => _ekonomiModu = val.first),
+            // Alt Kontrol & Mod Çubuğu
+            Container(
+              padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
+              color: const Color(0xFF161618),
+              child: Row(
+                mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                children: [
+                  Row(
+                    children: [
+                      const Text("Ekonomi Modu: "),
+                      Switch(
+                        value: _ekonomiModu,
+                        onChanged: (val) => setState(() => _ekonomiModu = val),
+                      ),
+                    ],
+                  ),
+                  Row(
+                    children: [
+                      const Text("Sesli Asistan: "),
+                      Switch(
+                        value: _sesAktif,
+                        onChanged: (val) => setState(() => _sesAktif = val),
+                      ),
+                    ],
+                  ),
+                ],
+              ),
             ),
           ],
         ),
@@ -1385,19 +761,256 @@ class _DashboardScreenState extends State<DashboardScreen> {
     );
   }
 
-  Widget _metricCard(String title, String value, String unit, Color valColor) {
-    return Expanded(
-      child: Container(
-        padding: const EdgeInsets.symmetric(vertical: 8, horizontal: 8),
-        decoration: BoxDecoration(color: const Color(0xFF1C1C1E), borderRadius: BorderRadius.circular(12)),
-        child: Column(
-          children: [
-            Text(title, style: const TextStyle(color: Colors.grey, fontSize: 10, fontWeight: FontWeight.bold)),
-            const SizedBox(height: 2),
-            Text(value, style: TextStyle(color: valColor, fontSize: 22, fontWeight: FontWeight.w900)),
-            Text(unit, style: const TextStyle(color: Colors.white54, fontSize: 10)),
-          ],
+  Widget _buildMetricTile(String title, String val, String unit, Color color) {
+    return Container(
+      decoration: BoxDecoration(
+        color: const Color(0xFF161618),
+        borderRadius: BorderRadius.circular(10),
+        border: Border.all(color: color.withOpacity(0.35)),
+      ),
+      child: Column(
+        mainAxisAlignment: MainAxisAlignment.center,
+        children: [
+          Text(title, style: TextStyle(color: color, fontSize: 13, fontWeight: FontWeight.w600)),
+          const SizedBox(height: 4),
+          Text(val, style: const TextStyle(fontSize: 26, fontWeight: FontWeight.bold)),
+          Text(unit, style: const TextStyle(fontSize: 11, color: Colors.white54)),
+        ],
+      ),
+    );
+  }
+}
+
+// -------------------------------------------------------------
+// 3. DTC (ARIZA KODU) SAYFASI
+// -------------------------------------------------------------
+class DtcScreen extends StatefulWidget {
+  final Future<String> Function(String cmd) sendObdCommand;
+  final bool isConnected;
+
+  const DtcScreen({
+    super.key,
+    required this.sendObdCommand,
+    required this.isConnected,
+  });
+
+  @override
+  State<DtcScreen> createState() => _DtcScreenState();
+}
+
+class _DtcScreenState extends State<DtcScreen> {
+  bool _isLoading = false;
+  List<String> _codes = [];
+  String _statusMessage = "Taramayı başlatmak için yenile butonuna basın.";
+
+  Future<void> _fetchDtc() async {
+    if (!widget.isConnected) {
+      setState(() => _statusMessage = "OBD cihazına bağlı değilsiniz.");
+      return;
+    }
+
+    setState(() {
+      _isLoading = true;
+      _statusMessage = "Arıza kodları okunuyor...";
+    });
+
+    List<String> foundCodes = [];
+    String res03 = await widget.sendObdCommand("03");
+    foundCodes.addAll(_parseDtcBytes(res03));
+
+    String res07 = await widget.sendObdCommand("07");
+    foundCodes.addAll(_parseDtcBytes(res07));
+
+    setState(() {
+      _codes = foundCodes.toSet().toList();
+      _isLoading = false;
+      _statusMessage = _codes.isEmpty ? "Temiz: Kayıtlı arıza kodu bulunamadı." : "${_codes.length} adet arıza kodu bulundu.";
+    });
+  }
+
+  List<String> _parseDtcBytes(String raw) {
+    List<String> parsed = [];
+    String clean = raw.replaceAll(RegExp(r'[\r\n\s>]'), '');
+
+    if (!clean.startsWith("43") && !clean.startsWith("47")) return parsed;
+    clean = clean.substring(2);
+
+    for (int i = 0; i + 4 <= clean.length; i += 4) {
+      String chunk = clean.substring(i, i + 4);
+      if (chunk == "0000") continue;
+
+      String prefix;
+      switch (chunk[0]) {
+        case '0': prefix = 'P0'; break;
+        case '1': prefix = 'P1'; break;
+        case '2': prefix = 'P2'; break;
+        case '3': prefix = 'P3'; break;
+        case '4': prefix = 'C0'; break;
+        case '8': prefix = 'B0'; break;
+        case 'C': prefix = 'U0'; break;
+        default: prefix = 'P0';
+      }
+      parsed.add(prefix + chunk.substring(1));
+    }
+    return parsed;
+  }
+
+  Future<void> _clearDtc() async {
+    if (!widget.isConnected) return;
+
+    final confirm = await showDialog<bool>(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        backgroundColor: const Color(0xFF1C1C1E),
+        title: const Text("Arıza Kodlarını Sıfırla"),
+        content: const Text("ECU hafızasındaki arızalar silinecek ve motor arıza ışığı (MIL) söndürülecek. Devam edilsin mi?"),
+        actions: [
+          TextButton(onPressed: () => Navigator.pop(ctx, false), child: const Text("İptal")),
+          ElevatedButton(
+            style: ElevatedButton.styleFrom(backgroundColor: Colors.redAccent),
+            onPressed: () => Navigator.pop(ctx, true),
+            child: const Text("Sil"),
+          ),
+        ],
+      ),
+    );
+
+    if (confirm == true) {
+      setState(() => _isLoading = true);
+      await widget.sendObdCommand("04");
+      await Future.delayed(const Duration(milliseconds: 500));
+      await _fetchDtc();
+    }
+  }
+
+  @override
+  void initState() {
+    super.initState();
+    if (widget.isConnected) {
+      _fetchDtc();
+    }
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return Scaffold(
+      appBar: AppBar(
+        title: const Text("DTC Arıza Teşhis"),
+        actions: [
+          IconButton(
+            icon: const Icon(Icons.refresh),
+            onPressed: _isLoading ? null : _fetchDtc,
+          ),
+          IconButton(
+            icon: const Icon(Icons.delete_forever, color: Colors.redAccent),
+            onPressed: _isLoading ? null : _clearDtc,
+          ),
+        ],
+      ),
+      body: _isLoading
+          ? const Center(child: CircularProgressIndicator())
+          : Column(
+              children: [
+                Container(
+                  width: double.infinity,
+                  padding: const EdgeInsets.all(12),
+                  color: const Color(0xFF1C1C1E),
+                  child: Text(_statusMessage, style: const TextStyle(fontSize: 14, color: Colors.white70)),
+                ),
+                Expanded(
+                  child: _codes.isEmpty
+                      ? const Center(
+                          child: Icon(Icons.check_circle_outline, size: 70, color: Colors.green),
+                        )
+                      : ListView.separated(
+                          padding: const EdgeInsets.all(12),
+                          itemCount: _codes.length,
+                          separatorBuilder: (_, __) => const SizedBox(height: 8),
+                          itemBuilder: (context, index) {
+                            final code = _codes[index];
+                            return Card(
+                              color: const Color(0xFF161618),
+                              child: ListTile(
+                                leading: const Icon(Icons.warning, color: Colors.amber),
+                                title: Text(code, style: const TextStyle(fontWeight: FontWeight.bold, fontSize: 18)),
+                                subtitle: Text(_getDtcMeaning(code)),
+                              ),
+                            );
+                          },
+                        ),
+                ),
+              ],
+            ),
+    );
+  }
+
+  String _getDtcMeaning(String code) {
+    const meanings = {
+      'P0100': 'Kütle Hava Akış (MAF) Sensör Devresi',
+      'P0171': 'Sistem Çok Fakir (Bank 1) - Olası Vakum / LPG Kalibrasyon Hatası',
+      'P0299': 'Turbo Doldurma Basıncı Düşük (Underboost)',
+      'P0300': 'Rastgele / Çoklu Silindir Ateşleme Kaçağı (Misfire)',
+      'P0420': 'Katalitik Konvertör Verimliliği Eşik Altında',
+    };
+    return meanings[code] ?? 'A16LET / Genel OBD2 Tanımlı Kod';
+  }
+}
+
+// -------------------------------------------------------------
+// 4. GPS ROTA TAKİP SAYFASI (FLUTTER_MAP)
+// -------------------------------------------------------------
+class RouteMapScreen extends StatelessWidget {
+  final List<LatLng> routePoints;
+
+  const RouteMapScreen({super.key, required this.routePoints});
+
+  @override
+  Widget build(BuildContext context) {
+    final initialCenter = routePoints.isNotEmpty
+        ? routePoints.last
+        : const LatLng(40.7580, 30.3790); // Varsayılan: Sakarya
+
+    return Scaffold(
+      appBar: AppBar(
+        title: const Text("Sürüş Rotası"),
+      ),
+      body: FlutterMap(
+        options: MapOptions(
+          initialCenter: initialCenter,
+          initialZoom: 14.0,
         ),
+        children: [
+          TileLayer(
+            urlTemplate: 'https://tile.openstreetmap.org/{z}/{x}/{y}.png',
+            userAgentPackageName: 'com.insignia.shiftassistant',
+          ),
+          PolylineLayer(
+            polylines: [
+              Polyline(
+                points: routePoints,
+                strokeWidth: 4.5,
+                color: Colors.blueAccent,
+              ),
+            ],
+          ),
+          if (routePoints.isNotEmpty)
+            MarkerLayer(
+              markers: [
+                Marker(
+                  point: routePoints.first,
+                  width: 30,
+                  height: 30,
+                  child: const Icon(Icons.trip_origin, color: Colors.green, size: 28),
+                ),
+                Marker(
+                  point: routePoints.last,
+                  width: 30,
+                  height: 30,
+                  child: const Icon(Icons.navigation, color: Colors.redAccent, size: 28),
+                ),
+              ],
+            ),
+        ],
       ),
     );
   }
