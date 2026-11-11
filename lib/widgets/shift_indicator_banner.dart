@@ -15,114 +15,82 @@ class ShiftIndicatorBanner extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
+    IconData icon;
+    String text;
+    Color accent;
+    Color bgColor;
+
     if (isShiftLight) {
-      return Container(
-        width: double.infinity,
-        padding: const EdgeInsets.symmetric(vertical: 14),
-        decoration: BoxDecoration(
-          color: Colors.redAccent,
-          borderRadius: BorderRadius.circular(16),
-          boxShadow: [
-            BoxShadow(
-              color: Colors.red.withOpacity(0.8),
-              blurRadius: 20,
-              spreadRadius: 2,
-            ),
-          ],
-        ),
-        child: Row(
-          mainAxisAlignment: MainAxisAlignment.center,
-          children: [
-            const Icon(Icons.flash_on, color: Colors.white, size: 32),
-            const SizedBox(width: 8),
-            Text(
-              'SHIFT! VİTES AT ➔ $recommendedGear',
-              style: const TextStyle(
-                fontSize: 22,
-                fontWeight: FontWeight.w900,
-                color: Colors.white,
-                letterSpacing: 1.5,
-              ),
-            ),
-          ],
-        ),
-      );
+      icon = Icons.bolt;
+      text = 'VİTES YÜKSELT  ➔  $recommendedGear. VİTES';
+      accent = Colors.white;
+      bgColor = const Color(0xFFD92626);
+    } else {
+      switch (advice) {
+        case ShiftAdvice.shiftUp:
+          icon = Icons.keyboard_double_arrow_up_rounded;
+          text = 'VİTES BÜYÜT  ➔  $recommendedGear. VİTES';
+          accent = const Color(0xFF34D399);
+          bgColor = const Color(0xFF122B24);
+          break;
+        case ShiftAdvice.shiftDown:
+          icon = Icons.keyboard_double_arrow_down_rounded;
+          text = 'VİTES KÜÇÜLT  ➔  $recommendedGear. VİTES';
+          accent = const Color(0xFFFBBF24);
+          bgColor = const Color(0xFF2D2312);
+          break;
+        case ShiftAdvice.maintain:
+          icon = Icons.check_circle_outline_rounded;
+          text = 'OPTİMAL VİTES SEYRİ';
+          accent = Colors.white70;
+          bgColor = const Color(0xFF141821);
+          break;
+      }
     }
 
-    switch (advice) {
-      case ShiftAdvice.shiftUp:
-        return Container(
-          width: double.infinity,
-          padding: const EdgeInsets.symmetric(vertical: 12),
-          decoration: BoxDecoration(
-            color: const Color(0xFF1B382B),
-            borderRadius: BorderRadius.circular(16),
-            border: Border.all(color: Colors.greenAccent, width: 1.5),
-          ),
-          child: Row(
-            mainAxisAlignment: MainAxisAlignment.center,
-            children: [
-              const Icon(Icons.arrow_upward, color: Colors.greenAccent, size: 28),
-              const SizedBox(width: 8),
-              Text(
-                'VİTES BÜYÜT ➔ $recommendedGear',
-                style: const TextStyle(
-                  fontSize: 18,
-                  fontWeight: FontWeight.bold,
-                  color: Colors.greenAccent,
+    return AnimatedContainer(
+      duration: const Duration(milliseconds: 180),
+      width: double.infinity,
+      padding: const EdgeInsets.symmetric(vertical: 11, horizontal: 14),
+      decoration: BoxDecoration(
+        color: bgColor,
+        borderRadius: BorderRadius.circular(14),
+        border: Border.all(
+          color: isShiftLight ? Colors.redAccent : accent.withOpacity(0.45),
+          width: 1.4,
+        ),
+        boxShadow: isShiftLight
+            ? [
+                BoxShadow(
+                  color: Colors.redAccent.withOpacity(0.55),
+                  blurRadius: 16,
+                  spreadRadius: 1,
                 ),
-              ),
-            ],
-          ),
-        );
-
-      case ShiftAdvice.shiftDown:
-        return Container(
-          width: double.infinity,
-          padding: const EdgeInsets.symmetric(vertical: 12),
-          decoration: BoxDecoration(
-            color: const Color(0xFF382E1B),
-            borderRadius: BorderRadius.circular(16),
-            border: Border.all(color: Colors.orangeAccent, width: 1.5),
-          ),
-          child: Row(
-            mainAxisAlignment: MainAxisAlignment.center,
-            children: [
-              const Icon(Icons.arrow_downward, color: Colors.orangeAccent, size: 28),
-              const SizedBox(width: 8),
-              Text(
-                'VİTES KÜÇÜLT ➔ $recommendedGear',
-                style: const TextStyle(
-                  fontSize: 18,
-                  fontWeight: FontWeight.bold,
-                  color: Colors.orangeAccent,
+              ]
+            : null,
+      ),
+      child: Row(
+        mainAxisAlignment: MainAxisAlignment.center,
+        children: [
+          Icon(icon, color: accent, size: 22),
+          const SizedBox(width: 8),
+          Flexible(
+            child: FittedBox(
+              fit: BoxFit.scaleDown,
+              child: Text(
+                text,
+                maxLines: 1,
+                style: TextStyle(
+                  fontSize: 15,
+                  fontWeight: FontWeight.w800,
+                  color: accent,
+                  letterSpacing: 1.1,
                 ),
-              ),
-            ],
-          ),
-        );
-
-      case ShiftAdvice.maintain:
-        return Container(
-          width: double.infinity,
-          padding: const EdgeInsets.symmetric(vertical: 12),
-          decoration: BoxDecoration(
-            color: const Color(0xFF161A22),
-            borderRadius: BorderRadius.circular(16),
-            border: Border.all(color: Colors.white12),
-          ),
-          child: const Center(
-            child: Text(
-              'OPTİMAL VİTES',
-              style: TextStyle(
-                fontSize: 16,
-                fontWeight: FontWeight.w600,
-                color: Colors.white54,
-                letterSpacing: 2,
               ),
             ),
           ),
-        );
-    }
+        ],
+      ),
+    );
   }
 }

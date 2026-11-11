@@ -15,101 +15,162 @@ class TripCostCard extends StatelessWidget {
     final fuel = state.fuelSettings;
     final coolant = state.telemetry.coolantTempCelsius;
 
+    final bool warmingUp = fuel.lpgMode && !tracker.isRunningOnLpg;
     final String activeFuelBadge = fuel.lpgMode
-        ? (tracker.isRunningOnLpg ? 'LPG AKTİF' : 'BENZİN (ISINIYOR ${coolant.toStringAsFixed(0)}°C)')
+        ? (warmingUp ? 'ISINIYOR (${coolant.toStringAsFixed(0)}°C)' : 'LPG')
         : 'BENZİN';
+    final Color badgeColor = warmingUp ? Colors.orangeAccent : Colors.tealAccent;
 
     return Container(
       padding: const EdgeInsets.all(14),
       decoration: BoxDecoration(
-        color: const Color(0xFF161A22),
-        borderRadius: BorderRadius.circular(14),
-        border: Border.all(color: Colors.white10),
+        color: const Color(0xFF141821),
+        borderRadius: BorderRadius.circular(16),
+        border: Border.all(color: Colors.white.withOpacity(0.08)),
       ),
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
+          // Üst başlık: rozet + sağda fiyat durumu (taşma/çarpışma olmaz)
           Row(
-            mainAxisAlignment: MainAxisAlignment.spaceBetween,
             children: [
-              Row(
-                children: [
-                  const Icon(Icons.local_gas_station, size: 16, color: Colors.tealAccent),
-                  const SizedBox(width: 6),
-                  Text(
-                    'SÜRÜŞ MALİYETİ ($activeFuelBadge)',
-                    style: const TextStyle(
-                      fontSize: 12,
-                      fontWeight: FontWeight.bold,
-                      color: Colors.tealAccent,
+              const Icon(Icons.local_gas_station, size: 16, color: Colors.tealAccent),
+              const SizedBox(width: 6),
+              const Text(
+                'SÜRÜŞ MALİYETİ',
+                style: TextStyle(
+                  fontSize: 12,
+                  fontWeight: FontWeight.w800,
+                  color: Colors.white,
+                  letterSpacing: 0.6,
+                ),
+              ),
+              const SizedBox(width: 8),
+              Container(
+                padding: const EdgeInsets.symmetric(horizontal: 7, vertical: 2),
+                decoration: BoxDecoration(
+                  color: badgeColor.withOpacity(0.16),
+                  borderRadius: BorderRadius.circular(6),
+                  border: Border.all(color: badgeColor.withOpacity(0.5)),
+                ),
+                child: Text(
+                  activeFuelBadge,
+                  style: TextStyle(
+                    fontSize: 10,
+                    fontWeight: FontWeight.bold,
+                    color: badgeColor,
+                  ),
+                ),
+              ),
+              const Spacer(),
+              Flexible(
+                child: InkWell(
+                  borderRadius: BorderRadius.circular(6),
+                  onTap: () => FuelSettingsDialog.show(context),
+                  child: Padding(
+                    padding: const EdgeInsets.symmetric(horizontal: 4, vertical: 2),
+                    child: Text(
+                      fuel.priceStatus,
+                      maxLines: 1,
+                      overflow: TextOverflow.ellipsis,
+                      textAlign: TextAlign.right,
+                      style: const TextStyle(
+                        fontSize: 11,
+                        color: Colors.amberAccent,
+                        fontWeight: FontWeight.w600,
+                      ),
                     ),
                   ),
-                ],
-              ),
-              InkWell(
-                onTap: () => FuelSettingsDialog.show(context),
-                child: Text(
-                  fuel.priceStatus,
-                  style: const TextStyle(fontSize: 11, color: Colors.amberAccent),
                 ),
               ),
             ],
           ),
-          const Divider(color: Colors.white12, height: 16),
+          const Divider(color: Colors.white12, height: 18),
+
+          // 3 ana metrik kutusu: eşit genişlik + FittedBox ile asla iç içe geçmez
           Row(
-            mainAxisAlignment: MainAxisAlignment.spaceBetween,
             children: [
-              _statCol(
-                'ANLIK TÜKETİM',
-                tracker.isFuelCutOff
-                    ? '0.0 L/100'
-                    : '${tracker.litersPer100Km.toStringAsFixed(1)} L/100',
-                tracker.isFuelCutOff ? Colors.greenAccent : Colors.white,
+              Expanded(
+                child: _statBox(
+                  'ANLIK TÜKETİM',
+                  tracker.isFuelCutOff
+                      ? '0.0 L/100'
+                      : '${tracker.litersPer100Km.toStringAsFixed(1)} L/100',
+                  tracker.isFuelCutOff ? Colors.greenAccent : Colors.cyanAccent,
+                ),
               ),
-              _statCol(
-                'ANLIK MALİYET',
-                '${tracker.tlPerKm.toStringAsFixed(2)} ₺/km',
-                Colors.amberAccent,
+              const SizedBox(width: 8),
+              Expanded(
+                child: _statBox(
+                  'KM MALİYETİ',
+                  '${tracker.tlPerKm.toStringAsFixed(2)} ₺/km',
+                  Colors.amberAccent,
+                ),
               ),
-              _statCol(
-                'TOPLAM TUTAR',
-                '${tracker.costTl.toStringAsFixed(2)} ₺',
-                Colors.greenAccent,
+              const SizedBox(width: 8),
+              Expanded(
+                child: _statBox(
+                  'TOPLAM TUTAR',
+                  '${tracker.costTl.toStringAsFixed(2)} ₺',
+                  Colors.greenAccent,
+                ),
               ),
             ],
           ),
           const SizedBox(height: 10),
-          Row(
-            mainAxisAlignment: MainAxisAlignment.spaceBetween,
-            children: [
-              Text(
-                'Mesafe: ${tracker.distanceKm.toStringAsFixed(2)} km',
-                style: const TextStyle(fontSize: 12, color: Colors.white70),
-              ),
-              Text(
-                'Harcanan: ${tracker.fuelLiters.toStringAsFixed(2)} L',
-                style: const TextStyle(fontSize: 12, color: Colors.white70),
-              ),
-              Text(
-                'Süre: ${formatDuration(tracker.activeSeconds.round())}',
-                style: const TextStyle(fontSize: 12, color: Colors.white70),
-              ),
-            ],
+
+          // Alt özet çubuğu
+          Container(
+            padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 7),
+            decoration: BoxDecoration(
+              color: const Color(0xFF0E1118),
+              borderRadius: BorderRadius.circular(10),
+            ),
+            child: Row(
+              children: [
+                Expanded(
+                  child: _miniInfo(
+                    Icons.route,
+                    '${tracker.distanceKm.toStringAsFixed(2)} km',
+                  ),
+                ),
+                Expanded(
+                  child: _miniInfo(
+                    Icons.opacity,
+                    '${tracker.fuelLiters.toStringAsFixed(2)} L',
+                  ),
+                ),
+                Expanded(
+                  child: _miniInfo(
+                    Icons.schedule,
+                    formatDuration(tracker.activeSeconds.round()),
+                  ),
+                ),
+              ],
+            ),
           ),
           const SizedBox(height: 10),
+
+          // Aksiyon butonları
           Row(
             children: [
               Expanded(
                 child: OutlinedButton.icon(
                   style: OutlinedButton.styleFrom(
                     foregroundColor: Colors.amberAccent,
-                    side: const BorderSide(color: Colors.amberAccent),
-                    padding: const EdgeInsets.symmetric(vertical: 8),
+                    side: BorderSide(color: Colors.amberAccent.withOpacity(0.6)),
+                    padding: const EdgeInsets.symmetric(vertical: 10),
+                    shape: RoundedRectangleBorder(
+                      borderRadius: BorderRadius.circular(10),
+                    ),
                   ),
                   icon: const Icon(Icons.history, size: 16),
-                  label: Text(
-                    'Geçmiş (${state.tripHistory.length})',
-                    style: const TextStyle(fontSize: 12, fontWeight: FontWeight.bold),
+                  label: FittedBox(
+                    fit: BoxFit.scaleDown,
+                    child: Text(
+                      'Geçmiş (${state.tripHistory.length})',
+                      style: const TextStyle(fontSize: 12, fontWeight: FontWeight.bold),
+                    ),
                   ),
                   onPressed: () => TripHistorySheet.show(context),
                 ),
@@ -118,13 +179,20 @@ class TripCostCard extends StatelessWidget {
               Expanded(
                 child: ElevatedButton.icon(
                   style: ElevatedButton.styleFrom(
-                    backgroundColor: Colors.green.shade700,
-                    padding: const EdgeInsets.symmetric(vertical: 8),
+                    backgroundColor: const Color(0xFF1F8A4C),
+                    foregroundColor: Colors.white,
+                    padding: const EdgeInsets.symmetric(vertical: 10),
+                    shape: RoundedRectangleBorder(
+                      borderRadius: BorderRadius.circular(10),
+                    ),
                   ),
-                  icon: const Icon(Icons.save, size: 16),
-                  label: const Text(
-                    'Bitir & Kaydet',
-                    style: TextStyle(fontSize: 12, fontWeight: FontWeight.bold),
+                  icon: const Icon(Icons.save_outlined, size: 16),
+                  label: const FittedBox(
+                    fit: BoxFit.scaleDown,
+                    child: Text(
+                      'Bitir & Kaydet',
+                      style: TextStyle(fontSize: 12, fontWeight: FontWeight.bold),
+                    ),
                   ),
                   onPressed: () async {
                     final saved = await state.finalizeCurrentTrip();
@@ -150,10 +218,15 @@ class TripCostCard extends StatelessWidget {
                 ),
               ),
               const SizedBox(width: 6),
-              IconButton(
-                tooltip: 'Aktif Sürüşü Sıfırla',
-                icon: const Icon(Icons.refresh, size: 20, color: Colors.white54),
-                onPressed: () => state.resetCurrentTrip(),
+              SizedBox(
+                width: 38,
+                height: 38,
+                child: IconButton(
+                  padding: EdgeInsets.zero,
+                  tooltip: 'Aktif Sürüşü Sıfırla',
+                  icon: const Icon(Icons.refresh, size: 19, color: Colors.white54),
+                  onPressed: () => state.resetCurrentTrip(),
+                ),
               ),
             ],
           ),
@@ -162,18 +235,62 @@ class TripCostCard extends StatelessWidget {
     );
   }
 
-  Widget _statCol(String label, String value, Color color) {
-    return Column(
-      crossAxisAlignment: CrossAxisAlignment.start,
+  Widget _statBox(String label, String value, Color color) {
+    return Container(
+      padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 8),
+      decoration: BoxDecoration(
+        color: const Color(0xFF0E1118),
+        borderRadius: BorderRadius.circular(10),
+        border: Border.all(color: Colors.white.withOpacity(0.05)),
+      ),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Text(
+            label,
+            maxLines: 1,
+            overflow: TextOverflow.ellipsis,
+            style: const TextStyle(
+              fontSize: 9.5,
+              color: Colors.white54,
+              fontWeight: FontWeight.w700,
+            ),
+          ),
+          const SizedBox(height: 4),
+          FittedBox(
+            fit: BoxFit.scaleDown,
+            alignment: Alignment.centerLeft,
+            child: Text(
+              value,
+              style: TextStyle(
+                fontSize: 15.5,
+                fontWeight: FontWeight.w900,
+                color: color,
+              ),
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+
+  Widget _miniInfo(IconData icon, String text) {
+    return Row(
+      mainAxisAlignment: MainAxisAlignment.center,
       children: [
-        Text(
-          label,
-          style: const TextStyle(fontSize: 10, color: Colors.white54, fontWeight: FontWeight.bold),
-        ),
-        const SizedBox(height: 2),
-        Text(
-          value,
-          style: TextStyle(fontSize: 16, fontWeight: FontWeight.bold, color: color),
+        Icon(icon, size: 13, color: Colors.white38),
+        const SizedBox(width: 4),
+        Flexible(
+          child: Text(
+            text,
+            maxLines: 1,
+            overflow: TextOverflow.ellipsis,
+            style: const TextStyle(
+              fontSize: 11.5,
+              color: Colors.white70,
+              fontWeight: FontWeight.w600,
+            ),
+          ),
         ),
       ],
     );

@@ -20,42 +20,50 @@ class DashboardScreen extends StatelessWidget {
   Widget build(BuildContext context) {
     final state = context.watch<AppStateProvider>();
     final telemetry = state.telemetry;
+    final boostBar = (telemetry.manifoldPressureKpa - 100.0) / 100.0;
 
     return Scaffold(
       backgroundColor: const Color(0xFF0B0E14),
       appBar: AppBar(
         backgroundColor: Colors.transparent,
         elevation: 0,
+        titleSpacing: 14,
         title: Row(
           children: [
-            const Icon(Icons.speed, color: Colors.cyanAccent),
-            const SizedBox(width: 8),
-            const Text(
-              'INSIGNIA OBD',
-              style: TextStyle(
-                fontWeight: FontWeight.w900,
-                letterSpacing: 2,
-                fontSize: 18,
+            const Icon(Icons.speed, color: Colors.cyanAccent, size: 20),
+            const SizedBox(width: 6),
+            const Flexible(
+              child: Text(
+                'INSIGNIA OBD',
+                maxLines: 1,
+                overflow: TextOverflow.ellipsis,
+                style: TextStyle(
+                  fontWeight: FontWeight.w900,
+                  letterSpacing: 1.2,
+                  fontSize: 15,
+                ),
               ),
             ),
-            const Spacer(),
-            // Bağlantı Durum Rozeti
+            const SizedBox(width: 8),
             _buildStatusBadge(state),
           ],
         ),
         actions: [
           IconButton(
-            icon: const Icon(Icons.local_gas_station, color: Colors.tealAccent),
+            visualDensity: VisualDensity.compact,
+            icon: const Icon(Icons.local_gas_station, color: Colors.tealAccent, size: 21),
             tooltip: 'Yakıt ve Şehir Ayarları',
             onPressed: () => FuelSettingsDialog.show(context),
           ),
           IconButton(
-            icon: const Icon(Icons.history, color: Colors.amberAccent),
+            visualDensity: VisualDensity.compact,
+            icon: const Icon(Icons.history, color: Colors.amberAccent, size: 21),
             tooltip: 'Geçmiş Sürüşler',
             onPressed: () => TripHistorySheet.show(context),
           ),
           IconButton(
-            icon: const Icon(Icons.bluetooth, color: Colors.white70),
+            visualDensity: VisualDensity.compact,
+            icon: const Icon(Icons.bluetooth, color: Colors.white70, size: 21),
             tooltip: 'OBD Bağlantısı',
             onPressed: () {
               Navigator.push(
@@ -65,7 +73,8 @@ class DashboardScreen extends StatelessWidget {
             },
           ),
           IconButton(
-            icon: const Icon(Icons.tune, color: Colors.white70),
+            visualDensity: VisualDensity.compact,
+            icon: const Icon(Icons.tune, color: Colors.white70, size: 21),
             tooltip: 'Ayarlar',
             onPressed: () {
               Navigator.push(
@@ -74,16 +83,17 @@ class DashboardScreen extends StatelessWidget {
               );
             },
           ),
+          const SizedBox(width: 4),
         ],
       ),
       body: SafeArea(
         child: SingleChildScrollView(
-          padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
+          padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 6),
           child: Column(
             children: [
               // Sürüş Modu Seçici
               _buildDrivingModeSelector(context, state),
-              const SizedBox(height: 12),
+              const SizedBox(height: 10),
 
               // Ana Takometre Kadranı
               TachometerGauge(
@@ -92,7 +102,7 @@ class DashboardScreen extends StatelessWidget {
                 currentGear: telemetry.currentGear,
                 isShiftLight: telemetry.isShiftLightActive,
               ),
-              const SizedBox(height: 16),
+              const SizedBox(height: 12),
 
               // Vites Tavsiye Şeridi (Shift Banner)
               ShiftIndicatorBanner(
@@ -100,7 +110,7 @@ class DashboardScreen extends StatelessWidget {
                 recommendedGear: telemetry.recommendedGear,
                 isShiftLight: telemetry.isShiftLightActive,
               ),
-              const SizedBox(height: 20),
+              const SizedBox(height: 14),
 
               // 4'lü Canlı Telemetri Kartları
               Row(
@@ -116,7 +126,7 @@ class DashboardScreen extends StatelessWidget {
                           : Colors.orangeAccent,
                     ),
                   ),
-                  const SizedBox(width: 12),
+                  const SizedBox(width: 10),
                   Expanded(
                     child: TelemetryCard(
                       title: 'Gaz Kelebeği',
@@ -128,7 +138,7 @@ class DashboardScreen extends StatelessWidget {
                   ),
                 ],
               ),
-              const SizedBox(height: 12),
+              const SizedBox(height: 10),
               Row(
                 children: [
                   Expanded(
@@ -140,40 +150,45 @@ class DashboardScreen extends StatelessWidget {
                       accentColor: Colors.purpleAccent,
                     ),
                   ),
-                  const SizedBox(width: 12),
+                  const SizedBox(width: 10),
                   Expanded(
                     child: TelemetryCard(
-                      title: 'Boost / MAP',
-                      value: (telemetry.manifoldPressureKpa / 100.0).toStringAsFixed(2),
+                      title: 'Turbo / Vakum',
+                      value: '${boostBar >= 0 ? '+' : ''}${boostBar.toStringAsFixed(2)}',
                       unit: 'Bar',
                       icon: Icons.compress,
-                      accentColor: Colors.greenAccent,
+                      accentColor: boostBar > 0.3 ? Colors.amberAccent : Colors.greenAccent,
                     ),
                   ),
                 ],
               ),
-              const SizedBox(height: 14),
+              const SizedBox(height: 12),
 
               // Canlı Sürüş Maliyeti & Geçmiş Kartı
               const TripCostCard(),
-              const SizedBox(height: 16),
+              const SizedBox(height: 12),
 
               // Canlı Simülasyon Demo Butonu
-              OutlinedButton.icon(
-                style: OutlinedButton.styleFrom(
-                  foregroundColor: state.isSimulationMode ? Colors.redAccent : Colors.white70,
-                  side: BorderSide(
-                    color: state.isSimulationMode ? Colors.redAccent : Colors.white24,
+              SizedBox(
+                width: double.infinity,
+                child: OutlinedButton.icon(
+                  style: OutlinedButton.styleFrom(
+                    foregroundColor: state.isSimulationMode ? Colors.redAccent : Colors.white70,
+                    side: BorderSide(
+                      color: state.isSimulationMode ? Colors.redAccent : Colors.white24,
+                    ),
+                    padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 11),
+                    shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
                   ),
-                  padding: const EdgeInsets.symmetric(horizontal: 20, vertical: 12),
-                  shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
+                  icon: Icon(state.isSimulationMode ? Icons.stop : Icons.play_arrow, size: 18),
+                  label: Text(
+                    state.isSimulationMode ? 'Simülasyonu Durdur' : 'Canlı Sürüş Simülasyonu (Demo)',
+                    style: const TextStyle(fontSize: 13, fontWeight: FontWeight.w600),
+                  ),
+                  onPressed: () => state.toggleSimulationMode(),
                 ),
-                icon: Icon(state.isSimulationMode ? Icons.stop : Icons.play_arrow),
-                label: Text(
-                  state.isSimulationMode ? 'Simülasyonu Durdur' : 'Canlı Sürüş Simülasyonu (Demo)',
-                ),
-                onPressed: () => state.toggleSimulationMode(),
               ),
+              const SizedBox(height: 8),
             ],
           ),
         ),
@@ -184,13 +199,16 @@ class DashboardScreen extends StatelessWidget {
   Widget _buildStatusBadge(AppStateProvider state) {
     if (state.isSimulationMode) {
       return Container(
-        padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
+        padding: const EdgeInsets.symmetric(horizontal: 7, vertical: 3),
         decoration: BoxDecoration(
           color: Colors.blue.withOpacity(0.2),
-          borderRadius: BorderRadius.circular(8),
+          borderRadius: BorderRadius.circular(6),
           border: Border.all(color: Colors.blueAccent),
         ),
-        child: const Text('DEMO', style: TextStyle(fontSize: 10, color: Colors.blueAccent, fontWeight: FontWeight.bold)),
+        child: const Text(
+          'DEMO',
+          style: TextStyle(fontSize: 9.5, color: Colors.blueAccent, fontWeight: FontWeight.bold),
+        ),
       );
     }
 
@@ -199,12 +217,12 @@ class DashboardScreen extends StatelessWidget {
     switch (state.connectionStatus) {
       case ObdConnectionStatus.connected:
         color = Colors.greenAccent;
-        label = 'OBD BAĞLI';
+        label = 'BAĞLI';
         break;
       case ObdConnectionStatus.connecting:
       case ObdConnectionStatus.initializing:
         color = Colors.amberAccent;
-        label = 'BAĞLANILIYOR';
+        label = 'BAĞLANIYOR';
         break;
       case ObdConnectionStatus.error:
         color = Colors.redAccent;
@@ -212,21 +230,21 @@ class DashboardScreen extends StatelessWidget {
         break;
       case ObdConnectionStatus.disconnected:
       default:
-        color = Colors.white30;
-        label = 'BAĞLANTI YOK';
+        color = Colors.white38;
+        label = 'ÇEVRİMDIŞI';
         break;
     }
 
     return Container(
-      padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
+      padding: const EdgeInsets.symmetric(horizontal: 7, vertical: 3),
       decoration: BoxDecoration(
         color: color.withOpacity(0.15),
-        borderRadius: BorderRadius.circular(8),
+        borderRadius: BorderRadius.circular(6),
         border: Border.all(color: color, width: 1),
       ),
       child: Text(
         label,
-        style: TextStyle(fontSize: 10, color: color, fontWeight: FontWeight.bold),
+        style: TextStyle(fontSize: 9.5, color: color, fontWeight: FontWeight.bold),
       ),
     );
   }
@@ -235,12 +253,13 @@ class DashboardScreen extends StatelessWidget {
     return Container(
       padding: const EdgeInsets.all(4),
       decoration: BoxDecoration(
-        color: const Color(0xFF161A22),
-        borderRadius: BorderRadius.circular(14),
+        color: const Color(0xFF141821),
+        borderRadius: BorderRadius.circular(12),
+        border: Border.all(color: Colors.white.withOpacity(0.06)),
       ),
       child: Row(
         children: [
-          _buildModeTab('EKO', DrivingMode.eco, state),
+          _buildModeTab('EKONOMİ', DrivingMode.eco, state),
           _buildModeTab('KONFOR', DrivingMode.comfort, state),
           _buildModeTab('SPORT', DrivingMode.sport, state),
         ],
@@ -258,17 +277,20 @@ class DashboardScreen extends StatelessWidget {
           padding: const EdgeInsets.symmetric(vertical: 8),
           decoration: BoxDecoration(
             color: isSelected
-                ? (mode == DrivingMode.sport ? Colors.redAccent : Colors.cyanAccent.withOpacity(0.2))
+                ? (mode == DrivingMode.sport
+                    ? Colors.redAccent.withOpacity(0.85)
+                    : Colors.cyanAccent.withOpacity(0.22))
                 : Colors.transparent,
-            borderRadius: BorderRadius.circular(10),
+            borderRadius: BorderRadius.circular(9),
           ),
           child: Center(
             child: Text(
               label,
               style: TextStyle(
-                fontSize: 12,
-                fontWeight: isSelected ? FontWeight.bold : FontWeight.w500,
+                fontSize: 11.5,
+                fontWeight: isSelected ? FontWeight.w800 : FontWeight.w600,
                 color: isSelected ? Colors.white : Colors.white54,
+                letterSpacing: 0.6,
               ),
             ),
           ),
