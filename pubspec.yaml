@@ -1,23 +1,19 @@
-name: insignia_vites_asistani
-description: Opel Insignia 1.6T (A16LET + M32) Akilli Vites, Yakit Maliyet ve Ariza Silici
-publish_to: 'none'
-version: 1.3.0+1
+name: insignia_asistan
+description: "Opel Insignia Vites Asistanı ve OBD2 Canlı Telemetri Uygulaması"
+publish_to: "none"
+version: 1.0.0+1
 
 environment:
-  sdk: '>=3.2.0 <4.0.0'
+  sdk: ">=3.0.0 <4.0.0"
 
 dependencies:
   flutter:
     sdk: flutter
-  flutter_bluetooth_serial: ^0.4.0
-  flutter_tts: ^4.0.2
-  permission_handler: ^11.3.1
-  wakelock_plus: ^1.2.5
+  cupertino_icons: ^1.0.6
+  provider: ^6.1.2
   shared_preferences: ^2.2.3
-  http: ^1.2.1
-  geolocator: ^10.1.0
-  flutter_map: ^7.0.2
-  latlong2: ^0.9.1
+  flutter_bluetooth_serial: ^0.4.0
+  permission_handler: ^11.3.1
 
 dev_dependencies:
   flutter_test:

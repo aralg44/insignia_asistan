@@ -3,6 +3,8 @@ name: Flutter Insignia APK Build
 on:
   push:
     branches: [ main, master ]
+  pull_request:
+    branches: [ main, master ]
   workflow_dispatch:
 
 jobs:
@@ -11,53 +13,32 @@ jobs:
     runs-on: ubuntu-latest
 
     steps:
-      - name: Checkout Repository
+      - name: Kodu Klonla
         uses: actions/checkout@v4
 
-      - name: Set up Java 17
+      - name: Java 17 Kurulumu
         uses: actions/setup-java@v4
         with:
           distribution: 'temurin'
           java-version: '17'
+          cache: 'gradle'
 
-      - name: Set up Flutter
+      - name: Flutter Ortamı Kurulumu
         uses: subosito/flutter-action@v2
         with:
           flutter-version: '3.24.3'
           channel: 'stable'
           cache: true
 
-      # Android klasörünü Flutter'ın güncel motoruyla sıfırdan ve uyumlu olarak üretir
-      - name: Recreate Android Project Scaffolding
-        run: |
-          flutter create --platforms=android --org com.insignia .
-
-      # Bluetooth ve Konum izinlerini üretilen AndroidManifest.xml'e enjekte eder
-      - name: Configure Android Manifest Permissions
-        run: |
-          sed -i '/<application/i \
-          <uses-permission android:name="android.permission.BLUETOOTH" />\
-          <uses-permission android:name="android.permission.BLUETOOTH_ADMIN" />\
-          <uses-permission android:name="android.permission.BLUETOOTH_SCAN" />\
-          <uses-permission android:name="android.permission.BLUETOOTH_CONNECT" />\
-          <uses-permission android:name="android.permission.ACCESS_FINE_LOCATION" />\
-          <uses-permission android:name="android.permission.ACCESS_COARSE_LOCATION" />\
-          <uses-permission android:name="android.permission.INTERNET" />' android/app/src/main/AndroidManifest.xml
-
-      # compileSdk ve minSdk ayarlarını garantiye alır
-      - name: Set SDK Versions
-        run: |
-          sed -i 's/compileSdk = .*/compileSdk = 34/' android/app/build.gradle* || true
-          sed -i 's/minSdk = .*/minSdk = 21/' android/app/build.gradle* || true
-
-      - name: Get Dependencies
+      - name: Bağımlılıkları Yükle
         run: flutter pub get
 
-      - name: Build APK
-        run: flutter build apk --release
+      - name: Android Release APK Derle
+        run: flutter build apk --release --no-tree-shake-icons
 
-      - name: Upload APK to Artifacts
+      - name: APK Dosyasını Artifact Olarak Kaydet
         uses: actions/upload-artifact@v4
         with:
-          name: Insignia-Vites-Asistani-APK
+          name: Insignia-Vites-Asistani-Release-APK
           path: build/app/outputs/flutter-apk/app-release.apk
+          if-no-files-found: error
