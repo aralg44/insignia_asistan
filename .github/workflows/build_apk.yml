@@ -1,123 +1,48 @@
-name: Insignia OBD APK Derleyici
+name: Flutter Insignia APK Build
 
 on:
   push:
-    branches: [ "main", "master" ]
+    branches: [ main, master ]
   workflow_dispatch:
 
 jobs:
   build:
+    name: Build Android Release APK
     runs-on: ubuntu-latest
+
     steps:
-      - name: Kodu Cek
+      - name: Checkout Repository
         uses: actions/checkout@v4
 
-      - name: Java 17 Kur
+      - name: Set up Java 17
         uses: actions/setup-java@v4
         with:
           distribution: 'temurin'
           java-version: '17'
 
-      - name: Flutter Kur
+      - name: Set up Flutter
         uses: subosito/flutter-action@v2
         with:
-          flutter-version: '3.24.5'
+          flutter-version: '3.24.3'
           channel: 'stable'
+          cache: true
 
-      - name: Eksik Android Dosyalarini Olustur ve Izinleri Ekle
-        run: |
-          flutter create --org com.insignia.asistan --platforms android .
-          python3 - << 'EOF'
-          p = "android/app/src/main/AndroidManifest.xml"
-          with open(p, "r", encoding="utf-8") as f:
-              s = f.read()
-          perms = """    <uses-permission android:name="android.permission.INTERNET" />
-              <uses-permission android:name="android.permission.BLUETOOTH" />
-              <uses-permission android:name="android.permission.BLUETOOTH_ADMIN" />
-              <uses-permission android:name="android.permission.BLUETOOTH_CONNECT" />
-              <uses-permission android:name="android.permission.BLUETOOTH_SCAN" />
-              <uses-permission android:name="android.permission.ACCESS_FINE_LOCATION" />
-              <uses-permission android:name="android.permission.ACCESS_COARSE_LOCATION" />
-          """
-          if "BLUETOOTH_CONNECT" not in s:
-              s = s.replace("<application", perms + "    <application", 1)
-          with open(p, "w", encoding="utf-8") as f:
-              f.write(s)
-          EOF
+      - name: Get Dependencies
+        run: flutter pub get
 
-      - name: Paketleri Indir ve Gradle Uyumlulugunu Duzelt
-        run: |
-          flutter pub get
-          python3 - << 'EOF'
-          import glob, os, re
+      - name: Build APK (Split per ABI & Fat APK)
+        run: flutter build apk --release
 
-          # 1. settings.gradle AGP ve Kotlin surumlerini guncelle
-          for p in glob.glob("android/settings.gradle*"):
-              with open(p, "r", encoding="utf-8") as f:
-                  s = f.read()
-              s = re.sub(r'id\s+"com\.android\.application"\s+version\s+"[^"]+"', 'id "com.android.application" version "8.3.2"', s)
-              s = re.sub(r'id\s+"org\.jetbrains\.kotlin\.android"\s+version\s+"[^"]+"', 'id "org.jetbrains.kotlin.android" version "1.9.24"', s)
-              with open(p, "w", encoding="utf-8") as f:
-                  f.write(s)
-
-          # 2. gradle-wrapper.properties Gradle 8.7 yap
-          gw = "android/gradle/wrapper/gradle-wrapper.properties"
-          if os.path.exists(gw):
-              with open(gw, "r", encoding="utf-8") as f:
-                  s = f.read()
-              s = re.sub(r"gradle-[0-9.]+-all\.zip", "gradle-8.7-all.zip", s)
-              s = re.sub(r"gradle-[0-9.]+-bin\.zip", "gradle-8.7-all.zip", s)
-              with open(gw, "w", encoding="utf-8") as f:
-                  f.write(s)
-
-          # 3. app/build.gradle minSdk (21), compileSdk (34), targetSdk (34) ayarla
-          for p in glob.glob("android/app/build.gradle*"):
-              with open(p, "r", encoding="utf-8") as f:
-                  s = f.read()
-              s = re.sub(r"minSdk\s*=?\s*flutter\.minSdkVersion", "minSdkVersion 21", s)
-              s = re.sub(r"minSdkVersion\s+flutter\.minSdkVersion", "minSdkVersion 21", s)
-              s = re.sub(r"compileSdk\s*=?\s*flutter\.compileSdkVersion", "compileSdkVersion 34", s)
-              s = re.sub(r"compileSdkVersion\s+flutter\.compileSdkVersion", "compileSdkVersion 34", s)
-              s = re.sub(r"targetSdk\s*=?\s*flutter\.targetSdkVersion", "targetSdkVersion 34", s)
-              s = re.sub(r"targetSdkVersion\s+flutter\.targetSdkVersion", "targetSdkVersion 34", s)
-              with open(p, "w", encoding="utf-8") as f:
-                  f.write(s)
-
-          # 4. Tum pub-cache eklentilerinin Android build.gradle dosyalarini AGP 8.3 / SDK 34 uyumlu yap
-          cache_roots = [
-              os.path.expanduser("~/.pub-cache"),
-              os.environ.get("PUB_CACHE", ""),
-          ]
-          for root in cache_roots:
-              if not root or not os.path.exists(root):
-                  continue
-              for p in glob.glob(os.path.join(root, "hosted/pub.dev/*/android/build.gradle")):
-                  with open(p, "r", encoding="utf-8") as f:
-                      s = f.read()
-                  if "flutter_bluetooth_serial" in p and "namespace" not in s:
-                      s = s.replace("android {", 'android {\n    namespace "io.github.edufolly.flutterbluetoothserial"', 1)
-                  s = re.sub(r"\bcompileSdk\s*=\s*[^\n]+", "compileSdkVersion 34", s)
-                  s = re.sub(r"\bcompileSdk\s+\d+", "compileSdkVersion 34", s)
-                  s = re.sub(r"\bcompileSdkVersion\s+\d+", "compileSdkVersion 34", s)
-                  s = re.sub(r"\bminSdk\s+(\d+)", r"minSdkVersion \1", s)
-                  s = re.sub(r"\bjvmTarget\s*=\s*17\b", "jvmTarget = '17'", s)
-                  with open(p, "w", encoding="utf-8") as f:
-                      f.write(s)
-
-              for p in glob.glob(os.path.join(root, "hosted/pub.dev/flutter_bluetooth_serial-*/android/src/main/AndroidManifest.xml")):
-                  with open(p, "r", encoding="utf-8") as f:
-                      s = f.read()
-                  s = re.sub(r'\s*package="[^"]+"', "", s)
-                  with open(p, "w", encoding="utf-8") as f:
-                      f.write(s)
-          EOF
-
-      - name: APK Derle
-        run: |
-          flutter build apk --release --no-tree-shake-icons
-
-      - name: APK Dosyasini Yukle
+      - name: Upload APK to Artifacts
         uses: actions/upload-artifact@v4
         with:
-          name: Insignia-1.6T-Vites-Asistani-APK
+          name: Insignia-Vites-Asistani-APK
           path: build/app/outputs/flutter-apk/app-release.apk
+
+      - name: Create GitHub Release
+        uses: softprops/action-gh-release@v2
+        if: startsWith(github.ref, 'refs/tags/')
+        with:
+          files: build/app/outputs/flutter-apk/app-release.apk
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
