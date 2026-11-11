@@ -27,10 +27,33 @@ jobs:
           channel: 'stable'
           cache: true
 
+      # Android klasörünü Flutter'ın güncel motoruyla sıfırdan ve uyumlu olarak üretir
+      - name: Recreate Android Project Scaffolding
+        run: |
+          flutter create --platforms=android --org com.insignia .
+
+      # Bluetooth ve Konum izinlerini üretilen AndroidManifest.xml'e enjekte eder
+      - name: Configure Android Manifest Permissions
+        run: |
+          sed -i '/<application/i \
+          <uses-permission android:name="android.permission.BLUETOOTH" />\
+          <uses-permission android:name="android.permission.BLUETOOTH_ADMIN" />\
+          <uses-permission android:name="android.permission.BLUETOOTH_SCAN" />\
+          <uses-permission android:name="android.permission.BLUETOOTH_CONNECT" />\
+          <uses-permission android:name="android.permission.ACCESS_FINE_LOCATION" />\
+          <uses-permission android:name="android.permission.ACCESS_COARSE_LOCATION" />\
+          <uses-permission android:name="android.permission.INTERNET" />' android/app/src/main/AndroidManifest.xml
+
+      # compileSdk ve minSdk ayarlarını garantiye alır
+      - name: Set SDK Versions
+        run: |
+          sed -i 's/compileSdk = .*/compileSdk = 34/' android/app/build.gradle* || true
+          sed -i 's/minSdk = .*/minSdk = 21/' android/app/build.gradle* || true
+
       - name: Get Dependencies
         run: flutter pub get
 
-      - name: Build APK (Split per ABI & Fat APK)
+      - name: Build APK
         run: flutter build apk --release
 
       - name: Upload APK to Artifacts
@@ -38,11 +61,3 @@ jobs:
         with:
           name: Insignia-Vites-Asistani-APK
           path: build/app/outputs/flutter-apk/app-release.apk
-
-      - name: Create GitHub Release
-        uses: softprops/action-gh-release@v2
-        if: startsWith(github.ref, 'refs/tags/')
-        with:
-          files: build/app/outputs/flutter-apk/app-release.apk
-        env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
