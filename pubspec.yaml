@@ -15,9 +15,7 @@ dependencies:
   wakelock_plus: ^1.2.5
   shared_preferences: ^2.2.3
   http: ^1.2.1
-
-  # GPS ve Harita Rota Paketleri (Build hatasını önleyen kararlı sürümler)
-  geolocator: 10.1.0
+  geolocator: ^10.1.0
   flutter_map: ^7.0.2
   latlong2: ^0.9.1
 
@@ -28,4 +26,3 @@ dev_dependencies:
 
 flutter:
   uses-material-design: true
-  
