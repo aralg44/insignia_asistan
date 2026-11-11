@@ -7,6 +7,9 @@ import '../services/obd_service.dart';
 import '../widgets/shift_indicator_banner.dart';
 import '../widgets/tachometer_gauge.dart';
 import '../widgets/telemetry_card.dart';
+import '../widgets/fuel_settings_dialog.dart';
+import '../widgets/trip_cost_card.dart';
+import '../widgets/trip_history_sheet.dart';
 import 'bluetooth_devices_screen.dart';
 import 'settings_screen.dart';
 
@@ -41,6 +44,16 @@ class DashboardScreen extends StatelessWidget {
           ],
         ),
         actions: [
+          IconButton(
+            icon: const Icon(Icons.local_gas_station, color: Colors.tealAccent),
+            tooltip: 'Yakıt ve Şehir Ayarları',
+            onPressed: () => FuelSettingsDialog.show(context),
+          ),
+          IconButton(
+            icon: const Icon(Icons.history, color: Colors.amberAccent),
+            tooltip: 'Geçmiş Sürüşler',
+            onPressed: () => TripHistorySheet.show(context),
+          ),
           IconButton(
             icon: const Icon(Icons.bluetooth, color: Colors.white70),
             tooltip: 'OBD Bağlantısı',
@@ -139,7 +152,11 @@ class DashboardScreen extends StatelessWidget {
                   ),
                 ],
               ),
-              const SizedBox(height: 20),
+              const SizedBox(height: 14),
+
+              // Canlı Sürüş Maliyeti & Geçmiş Kartı
+              const TripCostCard(),
+              const SizedBox(height: 16),
 
               // Canlı Simülasyon Demo Butonu
               OutlinedButton.icon(

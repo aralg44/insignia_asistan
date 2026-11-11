@@ -18,6 +18,7 @@ class ObdRawData {
   final double coolant;
   final double load;
   final double map;
+  final double maf; // Hava kütle debisi (g/s); 0 ise tahmini hesap kullanılır
 
   ObdRawData({
     required this.rpm,
@@ -26,6 +27,7 @@ class ObdRawData {
     required this.coolant,
     required this.load,
     required this.map,
+    this.maf = 0.0,
   });
 }
 
@@ -47,6 +49,7 @@ class ObdService {
   double _lastCoolant = 90.0;
   double _lastLoad = 15.0;
   double _lastMap = 101.0;
+  double _lastMaf = 0.0;
 
   Stream<ObdConnectionStatus> get statusStream => _statusController.stream;
   Stream<ObdRawData> get dataStream => _dataController.stream;
@@ -180,6 +183,28 @@ class ObdService {
         }
       }
     }
+    // 010B -> Emme Manifold Basıncı (MAP kPa) -> 410B AA
+    else if (clean.contains('410B')) {
+      int idx = clean.indexOf('410B') + 4;
+      if (clean.length >= idx + 2) {
+        String hexVal = clean.substring(idx, idx + 2);
+        int? rawVal = int.tryParse(hexVal, radix: 16);
+        if (rawVal != null) {
+          _lastMap = rawVal.toDouble();
+        }
+      }
+    }
+    // 0110 -> Hava Kütle Debisi (MAF g/s) -> 4110 AABB
+    else if (clean.contains('4110')) {
+      int idx = clean.indexOf('4110') + 4;
+      if (clean.length >= idx + 4) {
+        String hexVal = clean.substring(idx, idx + 4);
+        int? rawVal = int.tryParse(hexVal, radix: 16);
+        if (rawVal != null) {
+          _lastMaf = rawVal / 100.0;
+        }
+      }
+    }
 
     // Güncel veriyi stream'e fırlat
     _dataController.add(ObdRawData(
@@ -189,12 +214,14 @@ class ObdService {
       coolant: _lastCoolant,
       load: _lastLoad,
       map: _lastMap,
+      maf: _lastMaf,
     ));
   }
 
   /// Gerçek zamanlı telemetri PID döngüsü
   void _startPolling() async {
     _isPolling = true;
+    int loopCount = 0;
     while (_isPolling && _connection != null && _connection!.isConnected) {
       await sendCommand('010C'); // RPM (Öncelikli)
       await Future.delayed(const Duration(milliseconds: 40));
@@ -202,12 +229,25 @@ class ObdService {
       await sendCommand('010D'); // Hız (Öncelikli)
       await Future.delayed(const Duration(milliseconds: 40));
 
-      await sendCommand('0111'); // Gaz
+      await sendCommand('0104'); // Motor Yükü
       await Future.delayed(const Duration(milliseconds: 40));
 
-      // Yardımcı parametreler (Sıcaklık ve yük daha seyrek sorgulanır)
-      await sendCommand('0105');
-      await Future.delayed(const Duration(milliseconds: 60));
+      await sendCommand('010B'); // MAP (Turbo/Emme basıncı)
+      await Future.delayed(const Duration(milliseconds: 40));
+
+      await sendCommand('0110'); // MAF (Hava kütle debisi)
+      await Future.delayed(const Duration(milliseconds: 40));
+
+      // Gaz kelebeği ve soğutma suyu daha seyrek sorgulanır
+      if (loopCount % 2 == 0) {
+        await sendCommand('0111'); // Gaz kelebeği
+        await Future.delayed(const Duration(milliseconds: 40));
+      }
+      if (loopCount % 15 == 0) {
+        await sendCommand('0105'); // Soğutma suyu sıcaklığı
+        await Future.delayed(const Duration(milliseconds: 50));
+      }
+      loopCount++;
     }
   }
 
